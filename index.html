@@ -1,0 +1,698 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#082b3a">
+<title>Prism Pond</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #082b3a; touch-action: none; overscroll-behavior: none; }
+  canvas { display: block; width: 100%; height: 100%; cursor: none; }
+  #score  { position: fixed; top: 12px; left: 16px; color: #fff; font: 600 22px system-ui, -apple-system, sans-serif; text-shadow: 0 1px 4px rgba(0,0,0,.4); pointer-events: none; user-select: none; }
+  #zone   { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); color: #fff; font: 600 16px system-ui, -apple-system, sans-serif; text-shadow: 0 1px 4px rgba(0,0,0,.5); pointer-events: none; user-select: none; opacity: 0; transition: opacity .5s ease; letter-spacing: .04em; }
+  #hint   { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); color: #cdebff; font: 500 16px system-ui, -apple-system, sans-serif; text-shadow: 0 1px 4px rgba(0,0,0,.4); pointer-events: none; user-select: none; opacity: .85; transition: opacity 1.2s ease; text-align: center; }
+  #badges { position: fixed; top: 46px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; pointer-events: none; user-select: none; }
+  .badge  { padding: 5px 11px; border-radius: 14px; font: 700 13px system-ui, -apple-system, sans-serif; box-shadow: 0 2px 6px rgba(0,0,0,.35); color: #2a1a05; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="score">⭐ 0</div>
+<div id="zone"></div>
+<div id="badges"></div>
+<div id="hint">move your finger — chase the rainbow!</div>
+<script>
+(() => {
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+  const scoreEl  = document.getElementById('score');
+  const zoneEl   = document.getElementById('zone');
+  const hintEl   = document.getElementById('hint');
+  const badgesEl = document.getElementById('badges');
+
+  // --- audio: pentatonic chimes (no assets) ---
+  let ac = null;
+  const NOTES = [523.25, 587.33, 659.25, 783.99, 880.00, 1046.50, 1174.66]; // C5 D E G A C6 D6
+  function ensureAudio() {
+    if (ac) return;
+    try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  }
+  function chime(i, vol = 0.16) {
+    if (!ac) return;
+    const t = ac.currentTime;
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    o.type = 'triangle';
+    o.frequency.value = NOTES[((i % NOTES.length) + NOTES.length) % NOTES.length];
+    o.connect(g); g.connect(ac.destination);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+    o.start(t); o.stop(t + 0.6);
+  }
+  function arpeggio(steps, vol = 0.14) {
+    if (!ac) return;
+    steps.forEach((step, i) => {
+      const t = ac.currentTime + i * 0.07;
+      const o = ac.createOscillator();
+      const g = ac.createGain();
+      o.type = 'triangle';
+      o.frequency.value = NOTES[((step % NOTES.length) + NOTES.length) % NOTES.length];
+      o.connect(g); g.connect(ac.destination);
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(vol, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+      o.start(t); o.stop(t + 0.45);
+    });
+  }
+
+  // --- canvas sizing ---
+  let VW = 0, VH = 0; // viewport in CSS pixels
+  function resize() {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    VW = window.innerWidth;
+    VH = window.innerHeight;
+    cv.width  = Math.round(VW * dpr);
+    cv.height = Math.round(VH * dpr);
+    cv.style.width  = VW + 'px';
+    cv.style.height = VH + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // --- world + camera ---
+  const WORLD = { w: 4000, h: 2500 };
+  const camera = { x: 0, y: 0 }; // top-left of viewport, in world coords
+
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  // --- zones ---
+  const ZONES = [
+    { name: 'The Pond',          cx: WORLD.w * 0.50, cy: WORLD.h * 0.50, r: 950, color: '#1a5b7a', tint: 'rgba( 90,180,210,0.40)', poi: 'sunbeam', stars: 5,  cool: 6000  },
+    { name: 'Sunshine Shallows', cx: WORLD.w * 0.50, cy: WORLD.h * 0.12, r: 720, color: '#7fb86f', tint: 'rgba(255,220,120,0.45)', poi: 'lilypad', stars: 3,  cool: 5000  },
+    { name: 'Coral Garden',      cx: WORLD.w * 0.88, cy: WORLD.h * 0.55, r: 760, color: '#c84e6c', tint: 'rgba(230,110,150,0.42)', poi: 'coral',   stars: 5,  cool: 6000  },
+    { name: 'Kelp Forest',       cx: WORLD.w * 0.12, cy: WORLD.h * 0.55, r: 760, color: '#2c6b4e', tint: 'rgba( 60,160,110,0.45)', poi: 'kelp',    stars: 3,  cool: 7000  },
+    { name: 'Glowy Cave',        cx: WORLD.w * 0.50, cy: WORLD.h * 0.88, r: 720, color: '#3a2880', tint: 'rgba(120, 90,230,0.50)', poi: 'crystal', stars: 10, cool: 10000 },
+  ];
+  ZONES.forEach(z => { z.px = z.cx; z.py = z.cy; z.cooldownUntil = 0; z.touchR = 80; });
+
+  function zoneAt(x, y) {
+    let best = null, bestD = Infinity;
+    for (const z of ZONES) {
+      const d = Math.hypot(z.cx - x, z.cy - y);
+      if (d < z.r && d < bestD) { best = z; bestD = d; }
+    }
+    return best;
+  }
+
+  // --- input (screen → world via camera) ---
+  const target = { x: WORLD.w / 2, y: WORLD.h / 2 };
+  function setTarget(sx, sy) {
+    target.x = sx + camera.x;
+    target.y = sy + camera.y;
+    ensureAudio();
+  }
+  cv.addEventListener('mousemove',  e => setTarget(e.clientX, e.clientY));
+  cv.addEventListener('mousedown',  e => { ensureAudio(); setTarget(e.clientX, e.clientY); });
+  cv.addEventListener('touchstart', e => { e.preventDefault(); const t = e.touches[0]; setTarget(t.clientX, t.clientY); }, { passive: false });
+  cv.addEventListener('touchmove',  e => { e.preventDefault(); const t = e.touches[0]; setTarget(t.clientX, t.clientY); }, { passive: false });
+
+  // --- player fish (world coords) ---
+  const fish = { x: WORLD.w / 2, y: WORLD.h / 2, angle: 0, wiggle: 0, speed: 0 };
+
+  // --- trail ---
+  const COLORS = ['#ff5577', '#ff8a3d', '#ffd23f', '#7be86c', '#4fc3f7', '#7c6bff', '#c768ff'];
+  const POINT_R = 22;
+  const BASE_COLLECT_R = 44;
+  const TRAIL_LEN = 28;
+  const FADE_IN = 1.2, HOLD = 3.0, FADE_OUT = 6.0;
+
+  let trail = null;
+  let nextTrailAt = 0;
+  let score = 0;
+
+  function makeTrail() {
+    // spawn near fish so it's always visible in the viewport
+    const spread = Math.max(VW, VH) * 0.55;
+    const angA = rand(0, Math.PI * 2);
+    const angB = angA + rand(Math.PI * 0.6, Math.PI * 1.4);
+    const ax = clamp(fish.x + Math.cos(angA) * spread, 80, WORLD.w - 80);
+    const ay = clamp(fish.y + Math.sin(angA) * spread, 80, WORLD.h - 80);
+    const bx = clamp(fish.x + Math.cos(angB) * spread, 80, WORLD.w - 80);
+    const by = clamp(fish.y + Math.sin(angB) * spread, 80, WORLD.h - 80);
+    const ccx = (ax + bx) / 2 + rand(-spread * 0.4, spread * 0.4);
+    const ccy = (ay + by) / 2 + rand(-spread * 0.4, spread * 0.4);
+    const pts = [];
+    for (let i = 0; i < TRAIL_LEN; i++) {
+      const t = i / (TRAIL_LEN - 1);
+      const x = (1 - t) * (1 - t) * ax + 2 * (1 - t) * t * ccx + t * t * bx;
+      const y = (1 - t) * (1 - t) * ay + 2 * (1 - t) * t * ccy + t * t * by;
+      pts.push({ x, y, idx: i, offset: -i * 0.04, collected: false, color: COLORS[i % COLORS.length] });
+    }
+    return { points: pts, born: performance.now() };
+  }
+  function pointAlpha(p, now) {
+    const age = (now - trail.born) / 1000 + p.offset;
+    if (age < 0) return 0;
+    if (age < FADE_IN) return age / FADE_IN;
+    if (age < FADE_IN + HOLD) return 1;
+    const t = (age - FADE_IN - HOLD) / FADE_OUT;
+    return t >= 1 ? 0 : 1 - t;
+  }
+
+  // --- power-ups ---
+  const POWERUPS = {
+    big:     { color: '#ffcb6b', label: 'BIG'     },
+    fast:    { color: '#4fc3f7', label: 'FAST'    },
+    sparkle: { color: '#ff6bd1', label: 'SPARKLE' },
+  };
+  const POWERUP_KINDS = Object.keys(POWERUPS);
+  const POWERUP_COUNT = 32;
+  const POWERUP_DURATION_MS = 12000;
+  const POWERUP_RESPAWN_MS = 30000;
+  const POWERUP_TOUCH_R = 50;
+  const bubbles = [];
+  const active = []; // { kind, until }
+
+  function spawnBubble() {
+    const kind = POWERUP_KINDS[Math.floor(Math.random() * POWERUP_KINDS.length)];
+    bubbles.push({
+      x: rand(180, WORLD.w - 180),
+      y: rand(180, WORLD.h - 180),
+      kind,
+      color: POWERUPS[kind].color,
+      bob: Math.random() * Math.PI * 2,
+    });
+  }
+  for (let i = 0; i < POWERUP_COUNT; i++) spawnBubble();
+
+  function activate(kind, now) {
+    const ex = active.find(a => a.kind === kind);
+    const until = now + POWERUP_DURATION_MS;
+    if (ex) ex.until = Math.max(ex.until, until);
+    else    active.push({ kind, until });
+    renderBadges();
+  }
+  function pruneActive(now) {
+    let changed = false;
+    for (let i = active.length - 1; i >= 0; i--) {
+      if (now >= active[i].until) { active.splice(i, 1); changed = true; }
+    }
+    if (changed) renderBadges();
+  }
+  function hasPower(kind, now) { return active.some(a => a.kind === kind && now < a.until); }
+  function renderBadges() {
+    badgesEl.innerHTML = active.map(a =>
+      `<span class="badge" style="background:${POWERUPS[a.kind].color}">${POWERUPS[a.kind].label}</span>`
+    ).join('');
+  }
+
+  // --- particles ---
+  const particles = [];
+  function burst(x, y, color, count = 14, speedMul = 1) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = (70 + Math.random() * 160) * speedMul;
+      particles.push({
+        x, y,
+        vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        life: 0, max: 0.55 + Math.random() * 0.45,
+        size: 2.2 + Math.random() * 3.4,
+        color,
+      });
+    }
+  }
+  function sparkleEmit(x, y, color) {
+    particles.push({
+      x: x + rand(-10, 10), y: y + rand(-10, 10),
+      vx: rand(-25, 25), vy: rand(-40, 5),
+      life: 0, max: 0.55,
+      size: 2.2, color,
+    });
+  }
+
+  // --- ambient ripples (world coords, near fish) ---
+  const ripples = [];
+  let nextRippleAt = 0;
+
+  // --- POI drawing ---
+  function drawPOI(z, now) {
+    const t = now / 1000;
+    const x = z.px, y = z.py;
+    const ready = now >= z.cooldownUntil;
+    const dim = ready ? 1.0 : 0.55;
+
+    if (z.poi === 'sunbeam') {
+      const pulse = 0.7 + Math.sin(t * 0.9) * 0.3;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(t * 0.12);
+      for (let i = 0; i < 8; i++) {
+        ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = `rgba(255,235,170,${0.10 * pulse * dim})`;
+        ctx.beginPath();
+        ctx.moveTo(0, 0); ctx.lineTo(220, -34); ctx.lineTo(220, 34); ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+      const grad = ctx.createRadialGradient(x, y, 10, x, y, 260);
+      grad.addColorStop(0, `rgba(255,235,150,${0.55 * pulse * dim})`);
+      grad.addColorStop(0.55, 'rgba(255,210,90,0.22)');
+      grad.addColorStop(1, 'rgba(255,210,90,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(x, y, 260, 0, Math.PI * 2); ctx.fill();
+    } else if (z.poi === 'lilypad') {
+      const pads = [
+        [   0,    0, 70, 18, 0.0],
+        [-110,  -50, 55, 14, 0.3],
+        [  90,  -80, 60, 16, 0.5],
+        [ -60,  100, 50, 14, 0.8],
+        [ 130,   70, 65, 18, 1.1],
+      ];
+      pads.forEach((p, i) => {
+        const bob = Math.sin(t * 1.2 + i) * 4;
+        const px = x + p[0], py = y + p[1] + bob;
+        ctx.fillStyle = `rgba(61, 138, 77, ${dim})`;
+        ctx.beginPath(); ctx.ellipse(px, py, p[2], p[2] * 0.85, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#082b3a';
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px + p[2] * 0.95, py - p[2] * 0.22);
+        ctx.lineTo(px + p[2] * 0.95, py + p[2] * 0.22);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = `rgba(255,234,255,${dim})`;
+        ctx.beginPath(); ctx.arc(px - p[2] * 0.25, py, p[3] * 0.55, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = `rgba(255,189,107,${dim})`;
+        ctx.beginPath(); ctx.arc(px - p[2] * 0.25, py, p[3] * 0.20, 0, Math.PI * 2); ctx.fill();
+      });
+    } else if (z.poi === 'coral') {
+      const branches = [
+        [[0, 60], [0, -30], [-40, -100], [-30, -160]],
+        [[0, -30], [40, -90], [70, -140]],
+        [[0, 20], [-60, 0], [-110, -20]],
+        [[0, 20], [60, 30], [110, 40]],
+        [[0, 60], [30, 100], [50, 130]],
+      ];
+      ctx.strokeStyle = `rgba(255,138,168,${dim})`;
+      ctx.lineWidth = 16; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      branches.forEach(b => {
+        ctx.beginPath();
+        b.forEach((p, i) => i === 0 ? ctx.moveTo(x + p[0], y + p[1]) : ctx.lineTo(x + p[0], y + p[1]));
+        ctx.stroke();
+      });
+      ctx.strokeStyle = `rgba(255,194,209,${dim})`;
+      ctx.lineWidth = 7;
+      branches.forEach(b => {
+        ctx.beginPath();
+        b.forEach((p, i) => i === 0 ? ctx.moveTo(x + p[0], y + p[1]) : ctx.lineTo(x + p[0], y + p[1]));
+        ctx.stroke();
+      });
+      branches.forEach(b => {
+        const tip = b[b.length - 1];
+        ctx.fillStyle = `rgba(255,240,224,${dim})`;
+        ctx.beginPath(); ctx.arc(x + tip[0], y + tip[1], 10, 0, Math.PI * 2); ctx.fill();
+      });
+    } else if (z.poi === 'kelp') {
+      const fronds = [
+        [-110, 26],
+        [ -40, 20],
+        [  40, 24],
+        [ 110, 22],
+        [ 170, 18],
+        [-170, 18],
+      ];
+      fronds.forEach((f, i) => {
+        const phase = t * 0.8 + i * 0.7;
+        ctx.strokeStyle = `rgba(58, 138, 91, ${dim})`;
+        ctx.lineWidth = f[1]; ctx.lineCap = 'round';
+        ctx.beginPath();
+        for (let s = 0; s <= 280; s += 12) {
+          const sx = x + f[0] + Math.sin(phase + s * 0.025) * 18;
+          const sy = y + 220 - s;
+          if (s === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+        }
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(180,240,180,${0.35 * dim})`;
+        ctx.lineWidth = f[1] * 0.4;
+        ctx.beginPath();
+        for (let s = 0; s <= 280; s += 12) {
+          const sx = x + f[0] + Math.sin(phase + s * 0.025) * 18;
+          const sy = y + 220 - s;
+          if (s === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+        }
+        ctx.stroke();
+      });
+    } else if (z.poi === 'crystal') {
+      const pulse = 0.6 + Math.sin(t * 1.6) * 0.4;
+      const grad = ctx.createRadialGradient(x, y, 10, x, y, 240);
+      grad.addColorStop(0, `rgba(180,140,255,${0.55 * pulse * dim})`);
+      grad.addColorStop(0.55, 'rgba(140, 90,230,0.18)');
+      grad.addColorStop(1, 'rgba(80, 40,180,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(x, y, 240, 0, Math.PI * 2); ctx.fill();
+      const crystals = [
+        [   0,   0, 36, 110],
+        [ -55,  20, 28,  80],
+        [  60,  30, 30,  90],
+        [ -30,  55, 24,  62],
+        [  36,  65, 26,  70],
+      ];
+      crystals.forEach(c => {
+        const cx = x + c[0], cy = y + c[1];
+        ctx.fillStyle = `rgba(190,160,255,${(0.7 + pulse * 0.3) * dim})`;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - c[3] / 2);
+        ctx.lineTo(cx + c[2] / 2, cy);
+        ctx.lineTo(cx, cy + c[3] / 2);
+        ctx.lineTo(cx - c[2] / 2, cy);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = `rgba(255,255,255,${0.45 * dim})`;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - c[3] / 2);
+        ctx.lineTo(cx - 5, cy);
+        ctx.lineTo(cx, cy + c[3] / 2);
+        ctx.closePath(); ctx.fill();
+      });
+    }
+  }
+
+  // --- mini-map (screen space) ---
+  const MM_W = 168, MM_H = 110, MM_PAD = 12;
+  function drawMinimap() {
+    const x0 = VW - MM_W - MM_PAD;
+    const y0 = VH - MM_H - MM_PAD;
+    ctx.fillStyle = 'rgba(8,30,45,0.65)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 1;
+    roundRect(x0, y0, MM_W, MM_H, 10);
+    ctx.fill(); ctx.stroke();
+
+    const innerPad = 6;
+    const mw = MM_W - innerPad * 2;
+    const mh = MM_H - innerPad * 2;
+    const sx = mw / WORLD.w, sy = mh / WORLD.h;
+
+    ZONES.forEach(z => {
+      const zx = x0 + innerPad + z.cx * sx;
+      const zy = y0 + innerPad + z.cy * sy;
+      const zr = z.r * Math.min(sx, sy);
+      ctx.globalAlpha = 0.62;
+      ctx.fillStyle = z.color;
+      ctx.beginPath(); ctx.arc(zx, zy, zr, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+    });
+    ZONES.forEach(z => {
+      const pxm = x0 + innerPad + z.px * sx;
+      const pym = y0 + innerPad + z.py * sy;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(pxm, pym, 3, 0, Math.PI * 2); ctx.fill();
+    });
+    bubbles.forEach(p => {
+      const pxm = x0 + innerPad + p.x * sx;
+      const pym = y0 + innerPad + p.y * sy;
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(pxm, pym, 1.5, 0, Math.PI * 2); ctx.fill();
+    });
+    const vrx = x0 + innerPad + camera.x * sx;
+    const vry = y0 + innerPad + camera.y * sy;
+    const vrw = VW * sx, vrh = VH * sy;
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(vrx, vry, vrw, vrh);
+    const fxm = x0 + innerPad + fish.x * sx;
+    const fym = y0 + innerPad + fish.y * sy;
+    ctx.fillStyle = '#ffcb6b';
+    ctx.beginPath(); ctx.arc(fxm, fym, 3.6, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  // --- zone label fader ---
+  let currentZone = null;
+  let zoneFadeUntil = 0;
+  function updateZoneLabel(now) {
+    const z = zoneAt(fish.x, fish.y);
+    if (z && z !== currentZone) {
+      currentZone = z;
+      zoneEl.textContent = z.name;
+      zoneEl.style.opacity = '1';
+      zoneFadeUntil = now + 2400;
+    }
+    if (now > zoneFadeUntil && zoneEl.style.opacity !== '0') {
+      zoneEl.style.opacity = '0';
+    }
+  }
+
+  // --- main loop ---
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+
+    // fish update
+    const ease = hasPower('fast', now) ? 0.20 : 0.12;
+    const dx = target.x - fish.x, dy = target.y - fish.y;
+    const dist = Math.hypot(dx, dy);
+    fish.x += dx * ease;
+    fish.y += dy * ease;
+    if (dist > 2) fish.angle = Math.atan2(dy, dx);
+    fish.speed = dist;
+    fish.wiggle += dt * (5 + Math.min(dist, 400) * 0.03);
+    fish.x = clamp(fish.x, 40, WORLD.w - 40);
+    fish.y = clamp(fish.y, 40, WORLD.h - 40);
+
+    // camera follow + clamp
+    camera.x += (fish.x - VW / 2 - camera.x) * 0.10;
+    camera.y += (fish.y - VH / 2 - camera.y) * 0.10;
+    camera.x = clamp(camera.x, 0, Math.max(0, WORLD.w - VW));
+    camera.y = clamp(camera.y, 0, Math.max(0, WORLD.h - VH));
+
+    pruneActive(now);
+    updateZoneLabel(now);
+
+    // --- background ---
+    ctx.fillStyle = '#082b3a';
+    ctx.fillRect(0, 0, VW, VH);
+
+    ctx.save();
+    ctx.translate(-camera.x, -camera.y);
+
+    // zone gradient tints
+    ZONES.forEach(z => {
+      if (z.cx + z.r < camera.x || z.cx - z.r > camera.x + VW ||
+          z.cy + z.r < camera.y || z.cy - z.r > camera.y + VH) return;
+      const grad = ctx.createRadialGradient(z.cx, z.cy, 0, z.cx, z.cy, z.r);
+      grad.addColorStop(0, z.tint);
+      grad.addColorStop(1, 'rgba(8,43,58,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(z.cx, z.cy, z.r, 0, Math.PI * 2); ctx.fill();
+    });
+
+    // ambient ripples (near fish so always visible)
+    if (now > nextRippleAt) {
+      ripples.push({
+        x: fish.x + rand(-VW * 0.8, VW * 0.8),
+        y: fish.y + rand(-VH * 0.8, VH * 0.8),
+        life: 0, max: rand(2.5, 4.0), grow: rand(28, 55),
+      });
+      nextRippleAt = now + rand(450, 1300);
+    }
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const r = ripples[i];
+      r.life += dt;
+      if (r.life > r.max) { ripples.splice(i, 1); continue; }
+      const tt = r.life / r.max;
+      ctx.strokeStyle = `rgba(180,220,240,${Math.max(0, 0.22 - tt * 0.22)})`;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.arc(r.x, r.y, r.life * r.grow, 0, Math.PI * 2); ctx.stroke();
+    }
+
+    // POIs in view + touch reward
+    ZONES.forEach(z => {
+      const inView = !(z.px + 320 < camera.x || z.px - 320 > camera.x + VW ||
+                       z.py + 320 < camera.y || z.py - 320 > camera.y + VH);
+      if (inView) drawPOI(z, now);
+      // proximity reward (anywhere — works even if POI is just offscreen)
+      if (now >= z.cooldownUntil && Math.hypot(z.px - fish.x, z.py - fish.y) < z.touchR) {
+        score += z.stars;
+        scoreEl.textContent = '⭐ ' + score;
+        const burstColor = z.poi === 'sunbeam' ? '#ffdc6b'
+                         : z.poi === 'lilypad' ? '#ffeaff'
+                         : z.poi === 'coral'   ? '#ff8aa8'
+                         : z.poi === 'kelp'    ? '#7be86c'
+                         :                       '#c4a8ff';
+        burst(z.px, z.py, burstColor, 22, 1.1);
+        arpeggio(z.poi === 'crystal' ? [4, 6, 8, 10] : [0, 2, 4]);
+        z.cooldownUntil = now + z.cool;
+        hintEl.style.opacity = '0';
+      }
+    });
+
+    // bubble updates + collection
+    for (let i = bubbles.length - 1; i >= 0; i--) {
+      const b = bubbles[i];
+      if (Math.hypot(b.x - fish.x, b.y - fish.y) < POWERUP_TOUCH_R) {
+        bubbles.splice(i, 1);
+        activate(b.kind, now);
+        burst(b.x, b.y, b.color, 22, 0.9);
+        arpeggio([0, 3, 5, 7]);
+        setTimeout(spawnBubble, POWERUP_RESPAWN_MS);
+        continue;
+      }
+      // skip offscreen
+      if (b.x + 40 < camera.x || b.x - 40 > camera.x + VW ||
+          b.y + 40 < camera.y || b.y - 40 > camera.y + VH) continue;
+      b.bob += dt;
+      const yo = Math.sin(b.bob * 1.5) * 5;
+      const x = b.x, y = b.y + yo;
+      ctx.fillStyle = 'rgba(255,255,255,0.18)';
+      ctx.beginPath(); ctx.arc(x, y, 24, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, 22, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = b.color;
+      if (b.kind === 'big') {
+        ctx.beginPath(); ctx.ellipse(x - 1, y, 10, 6, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(x - 11, y); ctx.lineTo(x - 17, y - 6); ctx.lineTo(x - 17, y + 6); ctx.closePath();
+        ctx.fill();
+      } else if (b.kind === 'fast') {
+        ctx.beginPath();
+        ctx.moveTo(x + 4,  y - 12);
+        ctx.lineTo(x - 6,  y + 2);
+        ctx.lineTo(x,      y + 2);
+        ctx.lineTo(x - 4,  y + 12);
+        ctx.lineTo(x + 8,  y - 3);
+        ctx.lineTo(x + 2,  y - 3);
+        ctx.closePath(); ctx.fill();
+      } else { // sparkle
+        ctx.beginPath();
+        for (let k = 0; k < 8; k++) {
+          const ang = (k / 8) * Math.PI * 2 - Math.PI / 2;
+          const r = (k % 2 === 0) ? 12 : 5;
+          const sx = x + Math.cos(ang) * r;
+          const sy = y + Math.sin(ang) * r;
+          if (k === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+        }
+        ctx.closePath(); ctx.fill();
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.beginPath(); ctx.arc(x - 8, y - 8, 4, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // trail spawn + draw + collect
+    if (!trail && now > nextTrailAt) trail = makeTrail();
+    if (trail) {
+      let allDone = true;
+      const collectR = hasPower('big', now) ? BASE_COLLECT_R + 16 : BASE_COLLECT_R;
+      for (let i = 0; i < trail.points.length; i++) {
+        const p = trail.points[i];
+        if (p.collected) continue;
+        const a = pointAlpha(p, now);
+        if (a > 0.02) allDone = false;
+        if (a > 0.15 && Math.hypot(p.x - fish.x, p.y - fish.y) < collectR) {
+          p.collected = true;
+          score += 1;
+          scoreEl.textContent = '⭐ ' + score;
+          burst(p.x, p.y, p.color);
+          chime(p.idx);
+          if (score >= 6) hintEl.style.opacity = '0';
+          continue;
+        }
+        if (a <= 0.01) continue;
+        if (p.x + POINT_R * 2 < camera.x || p.x - POINT_R * 2 > camera.x + VW ||
+            p.y + POINT_R * 2 < camera.y || p.y - POINT_R * 2 > camera.y + VH) continue;
+        const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, POINT_R * 2);
+        grad.addColorStop(0,    hexA(p.color, a * 0.90));
+        grad.addColorStop(0.55, hexA(p.color, a * 0.30));
+        grad.addColorStop(1,    hexA(p.color, 0));
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(p.x, p.y, POINT_R * 2, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = hexA('#ffffff', a * 0.85);
+        ctx.beginPath(); ctx.arc(p.x, p.y, POINT_R * 0.42, 0, Math.PI * 2); ctx.fill();
+      }
+      if (allDone) { trail = null; nextTrailAt = now + 700; }
+    }
+
+    // sparkle-trail emission (when SPARKLE power-up is active)
+    if (hasPower('sparkle', now) && Math.random() < 0.7) {
+      sparkleEmit(fish.x, fish.y, '#ff6bd1');
+    }
+
+    // particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.life += dt;
+      const tt = p.life / p.max;
+      if (tt >= 1) { particles.splice(i, 1); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= 0.92; p.vy *= 0.92;
+      ctx.fillStyle = hexA(p.color, 1 - tt);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * (1 - tt * 0.5), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    drawFish(now);
+
+    ctx.restore();
+
+    // UI (screen space)
+    drawMinimap();
+
+    requestAnimationFrame(frame);
+  }
+
+  function drawFish(now) {
+    const big = hasPower('big', now);
+    const scale = big ? 1.7 : 1.0;
+    const wig = Math.sin(fish.wiggle) * (0.5 + Math.min(fish.speed, 300) / 600);
+    ctx.save();
+    ctx.translate(fish.x, fish.y);
+    ctx.rotate(fish.angle);
+    ctx.scale(scale, scale);
+    ctx.fillStyle = '#ffb84d';
+    ctx.beginPath();
+    ctx.moveTo(-14, 0);
+    ctx.lineTo(-30, -11 + wig * 9);
+    ctx.lineTo(-30,  11 + wig * 9);
+    ctx.closePath(); ctx.fill();
+    const bodyGrad = ctx.createLinearGradient(-20, 0, 22, 0);
+    bodyGrad.addColorStop(0, '#ffb84d');
+    bodyGrad.addColorStop(1, '#ffe089');
+    ctx.fillStyle = bodyGrad;
+    ctx.beginPath(); ctx.ellipse(0, 0, 22, 13, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,138,61,0.7)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-6, -11); ctx.lineTo(-2, 11); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo( 4, -12); ctx.lineTo( 8, 12); ctx.stroke();
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(10, -3, 3.8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#222';    ctx.beginPath(); ctx.arc(11, -3, 2.1, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(180,80,30,0.5)'; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(16, 2, 3, Math.PI * 0.15, Math.PI * 0.55); ctx.stroke();
+    ctx.restore();
+  }
+
+  function hexA(hex, a) {
+    let h = hex.replace('#', '');
+    if (h.length === 3) h = h.split('').map(c => c + c).join('');
+    const r = parseInt(h.substr(0, 2), 16);
+    const g = parseInt(h.substr(2, 2), 16);
+    const b = parseInt(h.substr(4, 2), 16);
+    return `rgba(${r},${g},${b},${a})`;
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
