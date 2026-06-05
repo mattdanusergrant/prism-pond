@@ -8,7 +8,7 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #082b3a; touch-action: none; overscroll-behavior: none; }
-  canvas { display: block; width: 100%; height: 100%; cursor: none; }
+  canvas { display: block; width: 100%; height: 100%; cursor: default; touch-action: none; }
   #score  { position: fixed; top: 12px; left: 16px; color: #fff; font: 600 22px system-ui, -apple-system, sans-serif; text-shadow: 0 1px 4px rgba(0,0,0,.4); pointer-events: none; user-select: none; }
   #zone   { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); color: #fff; font: 600 16px system-ui, -apple-system, sans-serif; text-shadow: 0 1px 4px rgba(0,0,0,.5); pointer-events: none; user-select: none; opacity: 0; transition: opacity .5s ease; letter-spacing: .04em; }
   #hint   { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); color: #cdebff; font: 500 16px system-ui, -apple-system, sans-serif; text-shadow: 0 1px 4px rgba(0,0,0,.4); pointer-events: none; user-select: none; opacity: .85; transition: opacity 1.2s ease; text-align: center; }
@@ -21,7 +21,7 @@
 <div id="score">⭐ 0</div>
 <div id="zone"></div>
 <div id="badges"></div>
-<div id="hint">move your finger — chase the rainbow!</div>
+<div id="hint">tap and drag anywhere to swim — chase the rainbow!</div>
 <script>
 (() => {
   const cv = document.getElementById('c');
@@ -108,20 +108,39 @@
     return best;
   }
 
-  // --- input (screen → world via camera) ---
-  const target = { x: WORLD.w / 2, y: WORLD.h / 2 };
-  function setTarget(sx, sy) {
-    target.x = sx + camera.x;
-    target.y = sy + camera.y;
-    ensureAudio();
-  }
-  cv.addEventListener('mousemove',  e => setTarget(e.clientX, e.clientY));
-  cv.addEventListener('mousedown',  e => { ensureAudio(); setTarget(e.clientX, e.clientY); });
-  cv.addEventListener('touchstart', e => { e.preventDefault(); const t = e.touches[0]; setTarget(t.clientX, t.clientY); }, { passive: false });
-  cv.addEventListener('touchmove',  e => { e.preventDefault(); const t = e.touches[0]; setTarget(t.clientX, t.clientY); }, { passive: false });
+  // --- input: floating joystick (tap/drag anywhere) + WASD/arrows ---
+  const JOY_MAX  = 80;
+  const JOY_DEAD = 6;
+  const joy = { active: false, ax: 0, ay: 0, cx: 0, cy: 0, dx: 0, dy: 0, mag: 0 };
+  const keys = {};
 
-  // --- player fish (world coords) ---
-  const fish = { x: WORLD.w / 2, y: WORLD.h / 2, angle: 0, wiggle: 0, speed: 0 };
+  function joyUpdate() {
+    const vx = joy.cx - joy.ax, vy = joy.cy - joy.ay;
+    const m = Math.hypot(vx, vy);
+    if (m < JOY_DEAD) { joy.dx = 0; joy.dy = 0; joy.mag = 0; return; }
+    joy.dx = vx / m;
+    joy.dy = vy / m;
+    joy.mag = Math.min(m, JOY_MAX) / JOY_MAX;
+  }
+  function joyStart(sx, sy) { joy.active = true; joy.ax = sx; joy.ay = sy; joy.cx = sx; joy.cy = sy; joyUpdate(); ensureAudio(); }
+  function joyMove (sx, sy) { if (!joy.active) return; joy.cx = sx; joy.cy = sy; joyUpdate(); }
+  function joyEnd()         { joy.active = false; joy.dx = 0; joy.dy = 0; joy.mag = 0; }
+
+  cv.addEventListener('mousedown',   e => { joyStart(e.clientX, e.clientY); });
+  cv.addEventListener('mousemove',   e => { joyMove (e.clientX, e.clientY); });
+  cv.addEventListener('mouseup',     ()=> { joyEnd(); });
+  cv.addEventListener('mouseleave',  ()=> { joyEnd(); });
+  cv.addEventListener('touchstart',  e => { e.preventDefault(); const t = e.touches[0]; joyStart(t.clientX, t.clientY); }, { passive: false });
+  cv.addEventListener('touchmove',   e => { e.preventDefault(); const t = e.touches[0]; joyMove (t.clientX, t.clientY); }, { passive: false });
+  cv.addEventListener('touchend',    e => { e.preventDefault(); joyEnd(); }, { passive: false });
+  cv.addEventListener('touchcancel', e => { e.preventDefault(); joyEnd(); }, { passive: false });
+
+  window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; ensureAudio(); });
+  window.addEventListener('keyup',   e => { keys[e.key.toLowerCase()] = false; });
+
+  // --- player unicorn (world coords) ---
+  const unicorn = { x: WORLD.w / 2, y: WORLD.h / 2, angle: 0, wiggle: 0, speed: 0 };
+  const BASE_SPEED = 360; // px/sec at full joystick deflection
 
   // --- trail ---
   const COLORS = ['#ff5577', '#ff8a3d', '#ffd23f', '#7be86c', '#4fc3f7', '#7c6bff', '#c768ff'];
@@ -139,10 +158,10 @@
     const spread = Math.max(VW, VH) * 0.55;
     const angA = rand(0, Math.PI * 2);
     const angB = angA + rand(Math.PI * 0.6, Math.PI * 1.4);
-    const ax = clamp(fish.x + Math.cos(angA) * spread, 80, WORLD.w - 80);
-    const ay = clamp(fish.y + Math.sin(angA) * spread, 80, WORLD.h - 80);
-    const bx = clamp(fish.x + Math.cos(angB) * spread, 80, WORLD.w - 80);
-    const by = clamp(fish.y + Math.sin(angB) * spread, 80, WORLD.h - 80);
+    const ax = clamp(unicorn.x + Math.cos(angA) * spread, 80, WORLD.w - 80);
+    const ay = clamp(unicorn.y + Math.sin(angA) * spread, 80, WORLD.h - 80);
+    const bx = clamp(unicorn.x + Math.cos(angB) * spread, 80, WORLD.w - 80);
+    const by = clamp(unicorn.y + Math.sin(angB) * spread, 80, WORLD.h - 80);
     const ccx = (ax + bx) / 2 + rand(-spread * 0.4, spread * 0.4);
     const ccy = (ay + by) / 2 + rand(-spread * 0.4, spread * 0.4);
     const pts = [];
@@ -420,8 +439,8 @@
     ctx.strokeStyle = 'rgba(255,255,255,0.35)';
     ctx.lineWidth = 1;
     ctx.strokeRect(vrx, vry, vrw, vrh);
-    const fxm = x0 + innerPad + fish.x * sx;
-    const fym = y0 + innerPad + fish.y * sy;
+    const fxm = x0 + innerPad + unicorn.x * sx;
+    const fym = y0 + innerPad + unicorn.y * sy;
     ctx.fillStyle = '#ffcb6b';
     ctx.beginPath(); ctx.arc(fxm, fym, 3.6, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
@@ -441,7 +460,7 @@
   let currentZone = null;
   let zoneFadeUntil = 0;
   function updateZoneLabel(now) {
-    const z = zoneAt(fish.x, fish.y);
+    const z = zoneAt(unicorn.x, unicorn.y);
     if (z && z !== currentZone) {
       currentZone = z;
       zoneEl.textContent = z.name;
@@ -459,21 +478,33 @@
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
 
-    // fish update
-    const ease = hasPower('fast', now) ? 0.20 : 0.12;
-    const dx = target.x - fish.x, dy = target.y - fish.y;
-    const dist = Math.hypot(dx, dy);
-    fish.x += dx * ease;
-    fish.y += dy * ease;
-    if (dist > 2) fish.angle = Math.atan2(dy, dx);
-    fish.speed = dist;
-    fish.wiggle += dt * (5 + Math.min(dist, 400) * 0.03);
-    fish.x = clamp(fish.x, 40, WORLD.w - 40);
-    fish.y = clamp(fish.y, 40, WORLD.h - 40);
+    // unicorn update — joystick OR WASD/arrows
+    let inX = 0, inY = 0;
+    if (joy.mag > 0) {
+      inX = joy.dx * joy.mag;
+      inY = joy.dy * joy.mag;
+    } else {
+      if (keys['w'] || keys['arrowup'])    inY -= 1;
+      if (keys['s'] || keys['arrowdown'])  inY += 1;
+      if (keys['a'] || keys['arrowleft'])  inX -= 1;
+      if (keys['d'] || keys['arrowright']) inX += 1;
+      const km = Math.hypot(inX, inY);
+      if (km > 1) { inX /= km; inY /= km; }
+    }
+    const speedMul = hasPower('fast', now) ? 1.7 : 1.0;
+    const vx = inX * BASE_SPEED * speedMul;
+    const vy = inY * BASE_SPEED * speedMul;
+    unicorn.x += vx * dt;
+    unicorn.y += vy * dt;
+    unicorn.speed = Math.hypot(vx, vy);
+    if (unicorn.speed > 5) unicorn.angle = Math.atan2(vy, vx);
+    unicorn.wiggle += dt * (5 + Math.min(unicorn.speed, 400) * 0.03);
+    unicorn.x = clamp(unicorn.x, 40, WORLD.w - 40);
+    unicorn.y = clamp(unicorn.y, 40, WORLD.h - 40);
 
     // camera follow + clamp
-    camera.x += (fish.x - VW / 2 - camera.x) * 0.10;
-    camera.y += (fish.y - VH / 2 - camera.y) * 0.10;
+    camera.x += (unicorn.x - VW / 2 - camera.x) * 0.10;
+    camera.y += (unicorn.y - VH / 2 - camera.y) * 0.10;
     camera.x = clamp(camera.x, 0, Math.max(0, WORLD.w - VW));
     camera.y = clamp(camera.y, 0, Math.max(0, WORLD.h - VH));
 
@@ -501,8 +532,8 @@
     // ambient ripples (near fish so always visible)
     if (now > nextRippleAt) {
       ripples.push({
-        x: fish.x + rand(-VW * 0.8, VW * 0.8),
-        y: fish.y + rand(-VH * 0.8, VH * 0.8),
+        x: unicorn.x + rand(-VW * 0.8, VW * 0.8),
+        y: unicorn.y + rand(-VH * 0.8, VH * 0.8),
         life: 0, max: rand(2.5, 4.0), grow: rand(28, 55),
       });
       nextRippleAt = now + rand(450, 1300);
@@ -523,7 +554,7 @@
                        z.py + 320 < camera.y || z.py - 320 > camera.y + VH);
       if (inView) drawPOI(z, now);
       // proximity reward (anywhere — works even if POI is just offscreen)
-      if (now >= z.cooldownUntil && Math.hypot(z.px - fish.x, z.py - fish.y) < z.touchR) {
+      if (now >= z.cooldownUntil && Math.hypot(z.px - unicorn.x, z.py - unicorn.y) < z.touchR) {
         score += z.stars;
         scoreEl.textContent = '⭐ ' + score;
         const burstColor = z.poi === 'sunbeam' ? '#ffdc6b'
@@ -541,7 +572,7 @@
     // bubble updates + collection
     for (let i = bubbles.length - 1; i >= 0; i--) {
       const b = bubbles[i];
-      if (Math.hypot(b.x - fish.x, b.y - fish.y) < POWERUP_TOUCH_R) {
+      if (Math.hypot(b.x - unicorn.x, b.y - unicorn.y) < POWERUP_TOUCH_R) {
         bubbles.splice(i, 1);
         activate(b.kind, now);
         burst(b.x, b.y, b.color, 22, 0.9);
@@ -600,7 +631,7 @@
         if (p.collected) continue;
         const a = pointAlpha(p, now);
         if (a > 0.02) allDone = false;
-        if (a > 0.15 && Math.hypot(p.x - fish.x, p.y - fish.y) < collectR) {
+        if (a > 0.15 && Math.hypot(p.x - unicorn.x, p.y - unicorn.y) < collectR) {
           p.collected = true;
           score += 1;
           scoreEl.textContent = '⭐ ' + score;
@@ -626,7 +657,7 @@
 
     // sparkle-trail emission (when SPARKLE power-up is active)
     if (hasPower('sparkle', now) && Math.random() < 0.7) {
-      sparkleEmit(fish.x, fish.y, '#ff6bd1');
+      sparkleEmit(unicorn.x, unicorn.y, '#ff6bd1');
     }
 
     // particles
@@ -643,42 +674,157 @@
       ctx.fill();
     }
 
-    drawFish(now);
+    drawUnicorn(now);
 
     ctx.restore();
 
     // UI (screen space)
     drawMinimap();
+    drawJoystick();
 
     requestAnimationFrame(frame);
   }
 
-  function drawFish(now) {
+  const RAINBOW = ['#ff5577', '#ff8a3d', '#ffd23f', '#7be86c', '#4fc3f7', '#7c6bff', '#c768ff'];
+
+  function drawUnicorn(now) {
     const big = hasPower('big', now);
     const scale = big ? 1.7 : 1.0;
-    const wig = Math.sin(fish.wiggle) * (0.5 + Math.min(fish.speed, 300) / 600);
+    const wig = Math.sin(unicorn.wiggle) * (0.5 + Math.min(unicorn.speed, 300) / 600);
+    const wag = Math.sin(unicorn.wiggle * 1.2) * 8;
+
+    // wake — surface ripples trailing behind, drawn in world space (no rotation)
+    const wake = Math.min(0.55, unicorn.speed / 420);
+    if (wake > 0.05) {
+      ctx.save();
+      ctx.translate(unicorn.x, unicorn.y);
+      ctx.rotate(unicorn.angle);
+      ctx.strokeStyle = `rgba(200,230,255,${wake})`;
+      ctx.lineWidth = 1.6;
+      for (let i = 0; i < 3; i++) {
+        const off = -(24 + i * 14) * scale;
+        ctx.beginPath();
+        ctx.ellipse(off, 0, (12 + i * 9) * scale, (5 + i * 3) * scale, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     ctx.save();
-    ctx.translate(fish.x, fish.y);
-    ctx.rotate(fish.angle);
+    ctx.translate(unicorn.x, unicorn.y);
+    ctx.rotate(unicorn.angle);
     ctx.scale(scale, scale);
-    ctx.fillStyle = '#ffb84d';
-    ctx.beginPath();
-    ctx.moveTo(-14, 0);
-    ctx.lineTo(-30, -11 + wig * 9);
-    ctx.lineTo(-30,  11 + wig * 9);
-    ctx.closePath(); ctx.fill();
-    const bodyGrad = ctx.createLinearGradient(-20, 0, 22, 0);
-    bodyGrad.addColorStop(0, '#ffb84d');
-    bodyGrad.addColorStop(1, '#ffe089');
+
+    // tail — rainbow streamers behind
+    ctx.lineCap = 'round';
+    for (let i = 0; i < RAINBOW.length; i++) {
+      ctx.strokeStyle = RAINBOW[i];
+      ctx.lineWidth = 2.4;
+      const baseY = -7 + i * (14 / (RAINBOW.length - 1));
+      ctx.beginPath();
+      ctx.moveTo(-16, baseY * 0.35);
+      ctx.quadraticCurveTo(-28, baseY + wag * 0.4, -44 + wig * 4, baseY + wag);
+      ctx.stroke();
+    }
+
+    // water-line shadow under body (submerged hint)
+    ctx.fillStyle = 'rgba(40, 80, 110, 0.28)';
+    ctx.beginPath(); ctx.ellipse(0, 6, 22, 5, 0, 0, Math.PI * 2); ctx.fill();
+
+    // body — soft white
+    const bodyGrad = ctx.createLinearGradient(-20, -8, 20, 8);
+    bodyGrad.addColorStop(0, '#ffffff');
+    bodyGrad.addColorStop(1, '#f1e8ff');
     ctx.fillStyle = bodyGrad;
-    ctx.beginPath(); ctx.ellipse(0, 0, 22, 13, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = 'rgba(255,138,61,0.7)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(-6, -11); ctx.lineTo(-2, 11); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo( 4, -12); ctx.lineTo( 8, 12); ctx.stroke();
-    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(10, -3, 3.8, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#222';    ctx.beginPath(); ctx.arc(11, -3, 2.1, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = 'rgba(180,80,30,0.5)'; ctx.lineWidth = 1.2;
-    ctx.beginPath(); ctx.arc(16, 2, 3, Math.PI * 0.15, Math.PI * 0.55); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(0, 0, 20, 11, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(190,170,220,0.7)'; ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // paddling legs — tiny ripples under body
+    const legPhase = unicorn.wiggle * 1.6;
+    ctx.fillStyle = 'rgba(220,235,255,0.55)';
+    for (let i = 0; i < 2; i++) {
+      const lx = -4 + i * 12;
+      const ly = 10 + Math.sin(legPhase + i * Math.PI) * 1.5;
+      ctx.beginPath(); ctx.ellipse(lx, ly, 3, 1.6, 0, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // head
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.ellipse(17, -3, 10, 7, -0.15, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(190,170,220,0.7)'; ctx.lineWidth = 1; ctx.stroke();
+
+    // mane — rainbow streamers from neck/back of head
+    for (let i = 0; i < RAINBOW.length; i++) {
+      ctx.strokeStyle = RAINBOW[i];
+      ctx.lineWidth = 2.2;
+      const baseY = -9 + i * (16 / (RAINBOW.length - 1));
+      ctx.beginPath();
+      ctx.moveTo(11, baseY * 0.4 - 4);
+      ctx.quadraticCurveTo(0, baseY * 0.7 - 4 + wag * 0.25, -10, baseY - 3 + wag * 0.5);
+      ctx.stroke();
+    }
+
+    // ear
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(17, -8); ctx.lineTo(20, -13); ctx.lineTo(22, -7); ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,180,210,0.7)';
+    ctx.beginPath();
+    ctx.moveTo(18, -8.5); ctx.lineTo(20, -11.5); ctx.lineTo(21, -8); ctx.closePath();
+    ctx.fill();
+
+    // horn — golden, pointing forward
+    ctx.save();
+    ctx.translate(22, -7);
+    ctx.rotate(-0.35);
+    const hornGrad = ctx.createLinearGradient(0, 0, 14, 0);
+    hornGrad.addColorStop(0, '#fff3a8');
+    hornGrad.addColorStop(1, '#ffb83c');
+    ctx.fillStyle = hornGrad;
+    ctx.beginPath();
+    ctx.moveTo(0, -2.2); ctx.lineTo(14, 0); ctx.lineTo(0, 2.2); ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(170,110,30,0.75)'; ctx.lineWidth = 0.8;
+    for (let s = 0; s < 3; s++) {
+      ctx.beginPath();
+      ctx.moveTo(2 + s * 4, -1.6);
+      ctx.lineTo(4 + s * 4,  1.6);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // eye
+    ctx.fillStyle = '#222';
+    ctx.beginPath(); ctx.arc(21, -3, 1.6, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(21.4, -3.4, 0.6, 0, Math.PI * 2); ctx.fill();
+
+    // cheek blush
+    ctx.fillStyle = 'rgba(255,170,200,0.55)';
+    ctx.beginPath(); ctx.arc(19, 1, 2, 0, Math.PI * 2); ctx.fill();
+
+    ctx.restore();
+  }
+
+  // --- joystick overlay (screen space) ---
+  function drawJoystick() {
+    if (!joy.active) return;
+    const vx = joy.cx - joy.ax, vy = joy.cy - joy.ay;
+    const m = Math.hypot(vx, vy);
+    const cm = Math.min(m, JOY_MAX);
+    const kx = joy.ax + (m > 0 ? vx / m : 0) * cm;
+    const ky = joy.ay + (m > 0 ? vy / m : 0) * cm;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(joy.ax, joy.ay, JOY_MAX, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath(); ctx.arc(kx, ky, 22, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
     ctx.restore();
   }
 
