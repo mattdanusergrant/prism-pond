@@ -396,66 +396,6 @@
     }
   }
 
-  // --- mini-map (screen space) ---
-  const MM_W = 168, MM_H = 110, MM_PAD = 12;
-  function drawMinimap() {
-    const x0 = VW - MM_W - MM_PAD;
-    const y0 = VH - MM_H - MM_PAD;
-    ctx.fillStyle = 'rgba(8,30,45,0.65)';
-    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-    ctx.lineWidth = 1;
-    roundRect(x0, y0, MM_W, MM_H, 10);
-    ctx.fill(); ctx.stroke();
-
-    const innerPad = 6;
-    const mw = MM_W - innerPad * 2;
-    const mh = MM_H - innerPad * 2;
-    const sx = mw / WORLD.w, sy = mh / WORLD.h;
-
-    ZONES.forEach(z => {
-      const zx = x0 + innerPad + z.cx * sx;
-      const zy = y0 + innerPad + z.cy * sy;
-      const zr = z.r * Math.min(sx, sy);
-      ctx.globalAlpha = 0.62;
-      ctx.fillStyle = z.color;
-      ctx.beginPath(); ctx.arc(zx, zy, zr, 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = 1;
-    });
-    ZONES.forEach(z => {
-      const pxm = x0 + innerPad + z.px * sx;
-      const pym = y0 + innerPad + z.py * sy;
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath(); ctx.arc(pxm, pym, 3, 0, Math.PI * 2); ctx.fill();
-    });
-    bubbles.forEach(p => {
-      const pxm = x0 + innerPad + p.x * sx;
-      const pym = y0 + innerPad + p.y * sy;
-      ctx.fillStyle = p.color;
-      ctx.beginPath(); ctx.arc(pxm, pym, 1.5, 0, Math.PI * 2); ctx.fill();
-    });
-    const vrx = x0 + innerPad + camera.x * sx;
-    const vry = y0 + innerPad + camera.y * sy;
-    const vrw = VW * sx, vrh = VH * sy;
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(vrx, vry, vrw, vrh);
-    const fxm = x0 + innerPad + unicorn.x * sx;
-    const fym = y0 + innerPad + unicorn.y * sy;
-    ctx.fillStyle = '#ffcb6b';
-    ctx.beginPath(); ctx.arc(fxm, fym, 3.6, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
-  }
-
-  function roundRect(x, y, w, h, r) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
-  }
-
   // --- zone label fader ---
   let currentZone = null;
   let zoneFadeUntil = 0;
@@ -679,7 +619,6 @@
     ctx.restore();
 
     // UI (screen space)
-    drawMinimap();
     drawJoystick();
 
     requestAnimationFrame(frame);
