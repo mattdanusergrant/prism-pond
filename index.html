@@ -154,18 +154,34 @@
   const BASE_SPEED = 90; // px/sec at full joystick deflection
   const ZOOM = 0.7;      // <1 zooms the world out
 
-  // --- rainbow road network: persistent strokes connecting start to every zone ---
+  // --- rainbow road network: persistent paths beneath the water ---
   const COLORS = ['#ff5577', '#ff8a3d', '#ffd23f', '#7be86c', '#4fc3f7', '#7c6bff', '#c768ff'];
-  const ROAD_WIDTH = 28;      // world units (stroke width)
-  const ROAD_GRIP  = 22;      // distance from centerline that still counts as "on road"
-  const DOT_SPACING = 70;     // world units between sampled bezier nodes
-  const HUB_RADIUS  = 110;    // ring of road around the starting point
-  const ROAD_BOOST  = 2.0;    // speed multiplier when travelling on a road
+  const ROAD_WIDTH = 56;      // world units (stroke width)
+  const ROAD_GRIP  = 30;      // distance from centerline that counts as "on road"
+  const ROAD_NEAR  = 110;     // within this distance counts as "near road"
+  const DOT_SPACING = 60;     // world units between sampled spline nodes
+  const HUB_RADIUS  = 130;    // ring of road around the starting point
+  const ROAD_BOOST  = 4.0;    // speed multiplier on a road
+  const NEAR_BOOST  = 2.0;    // speed multiplier near a road
+  const ROAD_BUFF_MS = 10000; // boost lingers this long after leaving
 
   let score = 0;
+  let onUntil = 0, nearUntil = 0;
   const paths = [];
 
-  function pushBezierPoints(pts, ax, ay, cx, cy, bx, by) {
+  // mix a road colour toward the pond's water blue so it reads as submerged
+  const WATER_RGB = { r: 8, g: 43, b: 58 };
+  function underwater(hex, mix) {
+    let h = hex.replace('#', '');
+    if (h.length === 3) h = h.split('').map(c => c + c).join('');
+    const r = Math.round(parseInt(h.substr(0, 2), 16) * (1 - mix) + WATER_RGB.r * mix);
+    const g = Math.round(parseInt(h.substr(2, 2), 16) * (1 - mix) + WATER_RGB.g * mix);
+    const b = Math.round(parseInt(h.substr(4, 2), 16) * (1 - mix) + WATER_RGB.b * mix);
+    return `rgb(${r},${g},${b})`;
+  }
+  const ROAD_COLORS = COLORS.map(c => underwater(c, 0.22));
+
+  function pushBezierPoints(pts, ax, ay, cx, cy, bx, by, skipFirst = false) {
     let approxLen = 0, prev = { x: ax, y: ay };
     for (let s = 1; s <= 12; s++) {
       const t = s / 12, u = 1 - t;
@@ -175,23 +191,38 @@
       prev = { x, y };
     }
     const n = Math.max(4, Math.round(approxLen / DOT_SPACING));
-    for (let i = 0; i < n; i++) {
+    const startI = skipFirst ? 1 : 0;
+    for (let i = startI; i < n; i++) {
       const t = i / (n - 1), u = 1 - t;
       const x = u*u*ax + 2*u*t*cx + t*t*bx;
       const y = u*u*ay + 2*u*t*cy + t*t*by;
-      pts.push({ x, y, color: COLORS[pts.length % COLORS.length] });
+      const idx = pts.length;
+      pts.push({ x, y, color: ROAD_COLORS[idx % ROAD_COLORS.length] });
     }
   }
 
-  function makeEdge(ax, ay, bx, by, curve = 0.22) {
+  // wistful path: chain of quadratic bezier segments with perpendicular
+  // control-point offsets that flip sign each segment → gentle S-curves
+  function makeEdge(ax, ay, bx, by) {
     const dx = bx - ax, dy = by - ay;
     const len = Math.hypot(dx, dy) || 1;
     const px = -dy / len, py = dx / len;
-    const off = (Math.random() - 0.5) * len * curve;
-    const cx = (ax + bx) / 2 + px * off;
-    const cy = (ay + by) / 2 + py * off;
+    const segs = 3 + Math.floor(Math.random() * 2); // 3 or 4 sub-curves
+    const seed = Math.random() < 0.5 ? 1 : -1;
     const pts = [];
-    pushBezierPoints(pts, ax, ay, cx, cy, bx, by);
+    let lastX = ax, lastY = ay;
+    for (let s = 0; s < segs; s++) {
+      const t1 = (s + 1) / segs;
+      const tm = (s + 0.5) / segs;
+      const endX = ax + dx * t1;
+      const endY = ay + dy * t1;
+      const offMag = (0.20 + Math.random() * 0.22) * len / segs * 1.6;
+      const sign = (s % 2 === 0 ? 1 : -1) * seed;
+      const ctrlX = ax + dx * tm + px * offMag * sign;
+      const ctrlY = ay + dy * tm + py * offMag * sign;
+      pushBezierPoints(pts, lastX, lastY, ctrlX, ctrlY, endX, endY, s > 0);
+      lastX = endX; lastY = endY;
+    }
     return { points: pts, closed: false };
   }
 
@@ -199,10 +230,11 @@
     const pts = [];
     for (let i = 0; i < n; i++) {
       const t = i / n * Math.PI * 2;
+      const wobble = 1 + Math.sin(t * 3 + Math.random() * 6) * 0.06;
       pts.push({
-        x: cx + Math.cos(t) * radius,
-        y: cy + Math.sin(t) * radius,
-        color: COLORS[i % COLORS.length],
+        x: cx + Math.cos(t) * radius * wobble,
+        y: cy + Math.sin(t) * radius * wobble,
+        color: ROAD_COLORS[i % ROAD_COLORS.length],
       });
     }
     return { points: pts, closed: true };
@@ -210,22 +242,19 @@
 
   function buildNetwork() {
     paths.length = 0;
-    // hub ring at the starting point — always reaches the start
-    paths.push(makeRing(START.x, START.y, HUB_RADIUS, 18));
-    // spokes from the hub edge out to each non-center zone
+    paths.push(makeRing(START.x, START.y, HUB_RADIUS, 22));
     for (let i = 1; i < ZONES.length; i++) {
       const z = ZONES[i];
       const ang = Math.atan2(z.cy - START.y, z.cx - START.x);
       const sx = START.x + Math.cos(ang) * HUB_RADIUS;
       const sy = START.y + Math.sin(ang) * HUB_RADIUS;
-      paths.push(makeEdge(sx, sy, z.cx, z.cy, 0.18));
+      paths.push(makeEdge(sx, sy, z.cx, z.cy));
     }
-    // outer ring connecting adjacent zones (Sunshine -> Coral -> Glowy -> Kelp)
     const ringOrder = [1, 2, 4, 3];
     for (let i = 0; i < ringOrder.length; i++) {
       const a = ZONES[ringOrder[i]];
       const b = ZONES[ringOrder[(i + 1) % ringOrder.length]];
-      paths.push(makeEdge(a.cx, a.cy, b.cx, b.cy, 0.20));
+      paths.push(makeEdge(a.cx, a.cy, b.cx, b.cy));
     }
   }
   buildNetwork();
@@ -239,7 +268,8 @@
     return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
   }
 
-  function isOnRoad(x, y) {
+  function roadDistance(x, y) {
+    let best = Infinity;
     for (let pi = 0; pi < paths.length; pi++) {
       const path = paths[pi];
       const pts = path.points;
@@ -247,10 +277,14 @@
       const last = path.closed ? n : n - 1;
       for (let i = 0; i < last; i++) {
         const a = pts[i], b = pts[(i + 1) % n];
-        if (distToSegment(x, y, a.x, a.y, b.x, b.y) < ROAD_GRIP) return true;
+        const d = distToSegment(x, y, a.x, a.y, b.x, b.y);
+        if (d < best) {
+          best = d;
+          if (best < 1) return best;
+        }
       }
     }
-    return false;
+    return best;
   }
 
   // --- power-ups ---
@@ -503,7 +537,10 @@
       if (km > 1) { inX /= km; inY /= km; }
     }
     const speedMul = hasPower('fast', now) ? 1.7 : 1.0;
-    const roadMul  = isOnRoad(unicorn.x, unicorn.y) ? ROAD_BOOST : 1.0;
+    const dToRoad = roadDistance(unicorn.x, unicorn.y);
+    if (dToRoad < ROAD_GRIP)       { onUntil   = now + ROAD_BUFF_MS; nearUntil = onUntil; }
+    else if (dToRoad < ROAD_NEAR)  { nearUntil = now + ROAD_BUFF_MS; }
+    const roadMul = now < onUntil ? ROAD_BOOST : (now < nearUntil ? NEAR_BOOST : 1.0);
     const vx = inX * BASE_SPEED * speedMul * roadMul;
     const vy = inY * BASE_SPEED * speedMul * roadMul;
     unicorn.x += vx * dt;
@@ -640,12 +677,13 @@
       ctx.beginPath(); ctx.arc(x - 8, y - 8, 4, 0, Math.PI * 2); ctx.fill();
     }
 
-    // rainbow roads — persistent strokes; double speed when travelled
+    // rainbow roads — opaque submerged painted lanes
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    const segCull = ROAD_WIDTH * 1.5;
-    // outer glow pass
-    ctx.lineWidth = ROAD_WIDTH * 1.9;
+    const segCull = ROAD_WIDTH * 1.4;
+    // dark water shadow just below the road (offset down + right slightly for depth)
+    ctx.lineWidth = ROAD_WIDTH + 6;
+    ctx.strokeStyle = 'rgba(5,22,32,0.45)';
     for (let pi = 0; pi < paths.length; pi++) {
       const path = paths[pi];
       const pts = path.points;
@@ -655,11 +693,10 @@
         const a = pts[i], b = pts[(i + 1) % n];
         if (Math.max(a.x, b.x) + segCull < camera.x || Math.min(a.x, b.x) - segCull > camera.x + vw ||
             Math.max(a.y, b.y) + segCull < camera.y || Math.min(a.y, b.y) - segCull > camera.y + vh) continue;
-        ctx.strokeStyle = hexA(a.color, 0.22);
-        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(a.x, a.y + 4); ctx.lineTo(b.x, b.y + 4); ctx.stroke();
       }
     }
-    // solid colour core
+    // solid muted-rainbow core (already pre-mixed with water in ROAD_COLORS)
     ctx.lineWidth = ROAD_WIDTH;
     for (let pi = 0; pi < paths.length; pi++) {
       const path = paths[pi];
@@ -674,9 +711,9 @@
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
       }
     }
-    // thin white centre-line for that polished-road feel
-    ctx.lineWidth = ROAD_WIDTH * 0.18;
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    // gentle water-haze overlay — covers the whole road to push it under the surface
+    ctx.lineWidth = ROAD_WIDTH;
+    ctx.strokeStyle = 'rgba(8,43,58,0.22)';
     for (let pi = 0; pi < paths.length; pi++) {
       const path = paths[pi];
       const pts = path.points;
@@ -687,6 +724,22 @@
         if (Math.max(a.x, b.x) + segCull < camera.x || Math.min(a.x, b.x) - segCull > camera.x + vw ||
             Math.max(a.y, b.y) + segCull < camera.y || Math.min(a.y, b.y) - segCull > camera.y + vh) continue;
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+    }
+    // shimmering caustic highlight — narrow drifting band on top
+    ctx.lineWidth = ROAD_WIDTH * 0.22;
+    const shimmer = 0.18 + Math.sin(now / 900) * 0.10;
+    ctx.strokeStyle = `rgba(190,225,240,${shimmer})`;
+    for (let pi = 0; pi < paths.length; pi++) {
+      const path = paths[pi];
+      const pts = path.points;
+      const n = pts.length;
+      const last = path.closed ? n : n - 1;
+      for (let i = 0; i < last; i++) {
+        const a = pts[i], b = pts[(i + 1) % n];
+        if (Math.max(a.x, b.x) + segCull < camera.x || Math.min(a.x, b.x) - segCull > camera.x + vw ||
+            Math.max(a.y, b.y) + segCull < camera.y || Math.min(a.y, b.y) - segCull > camera.y + vh) continue;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y - 6); ctx.lineTo(b.x, b.y - 6); ctx.stroke();
       }
     }
 
