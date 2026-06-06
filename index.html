@@ -12,8 +12,6 @@
   #score  { position: fixed; top: 12px; left: 16px; color: #fff; font: 600 22px system-ui, -apple-system, sans-serif; text-shadow: 0 1px 4px rgba(0,0,0,.4); pointer-events: none; user-select: none; }
   #zone   { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); color: #fff; font: 600 16px system-ui, -apple-system, sans-serif; text-shadow: 0 1px 4px rgba(0,0,0,.5); pointer-events: none; user-select: none; opacity: 0; transition: opacity .5s ease; letter-spacing: .04em; }
   #hint   { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); color: #cdebff; font: 500 16px system-ui, -apple-system, sans-serif; text-shadow: 0 1px 4px rgba(0,0,0,.4); pointer-events: none; user-select: none; opacity: .85; transition: opacity 1.2s ease; text-align: center; }
-  #badges { position: fixed; top: 46px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; pointer-events: none; user-select: none; }
-  .badge  { padding: 5px 11px; border-radius: 14px; font: 700 13px system-ui, -apple-system, sans-serif; box-shadow: 0 2px 6px rgba(0,0,0,.35); color: #2a1a05; }
   #mapBtn { position: fixed; top: 12px; right: 12px; width: 44px; height: 44px; border: 0; border-radius: 50%; background: rgba(8,30,45,.65); color: #fff; font-size: 22px; line-height: 1; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; box-shadow: 0 2px 6px rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; padding: 0; z-index: 5; }
   #mapBtn:active { transform: scale(.94); }
 </style>
@@ -22,7 +20,6 @@
 <canvas id="c"></canvas>
 <div id="score">⭐ 0</div>
 <div id="zone"></div>
-<div id="badges"></div>
 <div id="hint">tap and drag anywhere to swim — chase the rainbow!</div>
 <button id="mapBtn" aria-label="Open map" title="Map">🗺</button>
 <script>
@@ -32,7 +29,6 @@
   const scoreEl  = document.getElementById('score');
   const zoneEl   = document.getElementById('zone');
   const hintEl   = document.getElementById('hint');
-  const badgesEl = document.getElementById('badges');
 
   // --- audio: pentatonic chimes (no assets) ---
   let ac = null;
@@ -288,52 +284,6 @@
   }
 
   // --- power-ups ---
-  const POWERUPS = {
-    big:     { color: '#ffcb6b', label: 'BIG'     },
-    fast:    { color: '#4fc3f7', label: 'FAST'    },
-    sparkle: { color: '#ff6bd1', label: 'SPARKLE' },
-  };
-  const POWERUP_KINDS = Object.keys(POWERUPS);
-  const POWERUP_COUNT = 32;
-  const POWERUP_DURATION_MS = 12000;
-  const POWERUP_RESPAWN_MS = 30000;
-  const POWERUP_TOUCH_R = 50;
-  const bubbles = [];
-  const active = []; // { kind, until }
-
-  function spawnBubble() {
-    const kind = POWERUP_KINDS[Math.floor(Math.random() * POWERUP_KINDS.length)];
-    bubbles.push({
-      x: rand(180, WORLD.w - 180),
-      y: rand(180, WORLD.h - 180),
-      kind,
-      color: POWERUPS[kind].color,
-      bob: Math.random() * Math.PI * 2,
-    });
-  }
-  for (let i = 0; i < POWERUP_COUNT; i++) spawnBubble();
-
-  function activate(kind, now) {
-    const ex = active.find(a => a.kind === kind);
-    const until = now + POWERUP_DURATION_MS;
-    if (ex) ex.until = Math.max(ex.until, until);
-    else    active.push({ kind, until });
-    renderBadges();
-  }
-  function pruneActive(now) {
-    let changed = false;
-    for (let i = active.length - 1; i >= 0; i--) {
-      if (now >= active[i].until) { active.splice(i, 1); changed = true; }
-    }
-    if (changed) renderBadges();
-  }
-  function hasPower(kind, now) { return active.some(a => a.kind === kind && now < a.until); }
-  function renderBadges() {
-    badgesEl.innerHTML = active.map(a =>
-      `<span class="badge" style="background:${POWERUPS[a.kind].color}">${POWERUPS[a.kind].label}</span>`
-    ).join('');
-  }
-
   // --- particles ---
   const particles = [];
   function burst(x, y, color, count = 14, speedMul = 1) {
@@ -348,14 +298,6 @@
         color,
       });
     }
-  }
-  function sparkleEmit(x, y, color) {
-    particles.push({
-      x: x + rand(-10, 10), y: y + rand(-10, 10),
-      vx: rand(-25, 25), vy: rand(-40, 5),
-      life: 0, max: 0.55,
-      size: 2.2, color,
-    });
   }
 
   // --- ambient ripples (world coords, near fish) ---
@@ -536,13 +478,12 @@
       const km = Math.hypot(inX, inY);
       if (km > 1) { inX /= km; inY /= km; }
     }
-    const speedMul = hasPower('fast', now) ? 1.7 : 1.0;
     const dToRoad = roadDistance(unicorn.x, unicorn.y);
     if (dToRoad < ROAD_GRIP)       { onUntil   = now + ROAD_BUFF_MS; nearUntil = onUntil; }
     else if (dToRoad < ROAD_NEAR)  { nearUntil = now + ROAD_BUFF_MS; }
     const roadMul = now < onUntil ? ROAD_BOOST : (now < nearUntil ? NEAR_BOOST : 1.0);
-    const vx = inX * BASE_SPEED * speedMul * roadMul;
-    const vy = inY * BASE_SPEED * speedMul * roadMul;
+    const vx = inX * BASE_SPEED * roadMul;
+    const vy = inY * BASE_SPEED * roadMul;
     unicorn.x += vx * dt;
     unicorn.y += vy * dt;
     unicorn.speed = Math.hypot(vx, vy);
@@ -564,7 +505,6 @@
     camera.x = clamp(camera.x, 0, Math.max(0, WORLD.w - vw));
     camera.y = clamp(camera.y, 0, Math.max(0, WORLD.h - vh));
 
-    pruneActive(now);
     updateZoneLabel(now);
 
     // --- background ---
@@ -624,58 +564,6 @@
         z.cooldownUntil = now + z.cool;
       }
     });
-
-    // bubble updates + collection
-    for (let i = bubbles.length - 1; i >= 0; i--) {
-      const b = bubbles[i];
-      if (Math.hypot(b.x - unicorn.x, b.y - unicorn.y) < POWERUP_TOUCH_R) {
-        bubbles.splice(i, 1);
-        activate(b.kind, now);
-        burst(b.x, b.y, b.color, 22, 0.9);
-        arpeggio([0, 3, 5, 7]);
-        setTimeout(spawnBubble, POWERUP_RESPAWN_MS);
-        continue;
-      }
-      // skip offscreen
-      if (b.x + 40 < camera.x || b.x - 40 > camera.x + vw ||
-          b.y + 40 < camera.y || b.y - 40 > camera.y + vh) continue;
-      b.bob += dt;
-      const yo = Math.sin(b.bob * 1.5) * 5;
-      const x = b.x, y = b.y + yo;
-      ctx.fillStyle = 'rgba(255,255,255,0.18)';
-      ctx.beginPath(); ctx.arc(x, y, 24, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(x, y, 22, 0, Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = b.color;
-      if (b.kind === 'big') {
-        ctx.beginPath(); ctx.ellipse(x - 1, y, 10, 6, 0, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(x - 11, y); ctx.lineTo(x - 17, y - 6); ctx.lineTo(x - 17, y + 6); ctx.closePath();
-        ctx.fill();
-      } else if (b.kind === 'fast') {
-        ctx.beginPath();
-        ctx.moveTo(x + 4,  y - 12);
-        ctx.lineTo(x - 6,  y + 2);
-        ctx.lineTo(x,      y + 2);
-        ctx.lineTo(x - 4,  y + 12);
-        ctx.lineTo(x + 8,  y - 3);
-        ctx.lineTo(x + 2,  y - 3);
-        ctx.closePath(); ctx.fill();
-      } else { // sparkle
-        ctx.beginPath();
-        for (let k = 0; k < 8; k++) {
-          const ang = (k / 8) * Math.PI * 2 - Math.PI / 2;
-          const r = (k % 2 === 0) ? 12 : 5;
-          const sx = x + Math.cos(ang) * r;
-          const sy = y + Math.sin(ang) * r;
-          if (k === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
-        }
-        ctx.closePath(); ctx.fill();
-      }
-      ctx.fillStyle = 'rgba(255,255,255,0.55)';
-      ctx.beginPath(); ctx.arc(x - 8, y - 8, 4, 0, Math.PI * 2); ctx.fill();
-    }
 
     // rainbow roads — opaque submerged painted lanes
     ctx.lineCap = 'round';
@@ -743,10 +631,6 @@
       }
     }
 
-    // sparkle-trail emission (when SPARKLE power-up is active)
-    if (hasPower('sparkle', now) && Math.random() < 0.7) {
-      sparkleEmit(unicorn.x, unicorn.y, '#ff6bd1');
-    }
 
     // particles
     for (let i = particles.length - 1; i >= 0; i--) {
@@ -775,8 +659,7 @@
   const RAINBOW = ['#ff5577', '#ff8a3d', '#ffd23f', '#7be86c', '#4fc3f7', '#7c6bff', '#c768ff'];
 
   function drawUnicorn(now) {
-    const big = hasPower('big', now);
-    const scale = big ? 1.7 : 1.0;
+    const scale = 1.0;
     const wig = Math.sin(unicorn.wiggle) * (0.5 + Math.min(unicorn.speed, 300) / 600);
     const wag = Math.sin(unicorn.wiggle * 1.2) * 8;
 
@@ -955,10 +838,6 @@
     ZONES.forEach(z => {
       ctx.fillStyle = '#ffffff';
       ctx.beginPath(); ctx.arc(x0 + z.px * sx, y0 + z.py * sy, 4, 0, Math.PI * 2); ctx.fill();
-    });
-    bubbles.forEach(p => {
-      ctx.fillStyle = p.color;
-      ctx.beginPath(); ctx.arc(x0 + p.x * sx, y0 + p.y * sy, 2, 0, Math.PI * 2); ctx.fill();
     });
     ctx.strokeStyle = 'rgba(255,255,255,0.35)';
     ctx.lineWidth = 1;
