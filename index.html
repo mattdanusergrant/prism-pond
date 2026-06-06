@@ -20,7 +20,7 @@
 <canvas id="c"></canvas>
 <div id="score">⭐ 0</div>
 <div id="zone"></div>
-<div id="hint">tap and drag anywhere to swim — chase the rainbow!</div>
+<div id="hint">tap and hold where you want to swim — chase the rainbow!</div>
 <button id="mapBtn" aria-label="Open map" title="Map">🗺</button>
 <script>
 (() => {
@@ -107,32 +107,23 @@
     return best;
   }
 
-  // --- input: floating joystick (tap/drag anywhere) + WASD/arrows ---
-  const JOY_MAX  = 80;
-  const JOY_DEAD = 6;
-  const joy = { active: false, ax: 0, ay: 0, cx: 0, cy: 0, dx: 0, dy: 0, mag: 0 };
+  // --- input: tap/hold on a spot, unicorn swims toward it; WASD/arrows on desktop ---
+  const ARRIVE_R = 14; // stop within this many world units of the tap
+  const press = { active: false, sx: 0, sy: 0 };
   const keys = {};
 
-  function joyUpdate() {
-    const vx = joy.cx - joy.ax, vy = joy.cy - joy.ay;
-    const m = Math.hypot(vx, vy);
-    if (m < JOY_DEAD) { joy.dx = 0; joy.dy = 0; joy.mag = 0; return; }
-    joy.dx = vx / m;
-    joy.dy = vy / m;
-    joy.mag = Math.min(m, JOY_MAX) / JOY_MAX;
-  }
-  function joyStart(sx, sy) { if (mapOpen) { mapOpen = false; return; } joy.active = true; joy.ax = sx; joy.ay = sy; joy.cx = sx; joy.cy = sy; joyUpdate(); ensureAudio(); }
-  function joyMove (sx, sy) { if (!joy.active) return; joy.cx = sx; joy.cy = sy; joyUpdate(); }
-  function joyEnd()         { joy.active = false; joy.dx = 0; joy.dy = 0; joy.mag = 0; }
+  function pressStart(sx, sy) { if (mapOpen) { mapOpen = false; return; } press.active = true; press.sx = sx; press.sy = sy; ensureAudio(); }
+  function pressMove (sx, sy) { if (!press.active) return; press.sx = sx; press.sy = sy; }
+  function pressEnd()         { press.active = false; }
 
-  cv.addEventListener('mousedown',   e => { joyStart(e.clientX, e.clientY); });
-  cv.addEventListener('mousemove',   e => { joyMove (e.clientX, e.clientY); });
-  cv.addEventListener('mouseup',     ()=> { joyEnd(); });
-  cv.addEventListener('mouseleave',  ()=> { joyEnd(); });
-  cv.addEventListener('touchstart',  e => { e.preventDefault(); const t = e.touches[0]; joyStart(t.clientX, t.clientY); }, { passive: false });
-  cv.addEventListener('touchmove',   e => { e.preventDefault(); const t = e.touches[0]; joyMove (t.clientX, t.clientY); }, { passive: false });
-  cv.addEventListener('touchend',    e => { e.preventDefault(); joyEnd(); }, { passive: false });
-  cv.addEventListener('touchcancel', e => { e.preventDefault(); joyEnd(); }, { passive: false });
+  cv.addEventListener('mousedown',   e => { pressStart(e.clientX, e.clientY); });
+  cv.addEventListener('mousemove',   e => { pressMove (e.clientX, e.clientY); });
+  cv.addEventListener('mouseup',     ()=> { pressEnd(); });
+  cv.addEventListener('mouseleave',  ()=> { pressEnd(); });
+  cv.addEventListener('touchstart',  e => { e.preventDefault(); const t = e.touches[0]; pressStart(t.clientX, t.clientY); }, { passive: false });
+  cv.addEventListener('touchmove',   e => { e.preventDefault(); const t = e.touches[0]; pressMove (t.clientX, t.clientY); }, { passive: false });
+  cv.addEventListener('touchend',    e => { e.preventDefault(); pressEnd(); }, { passive: false });
+  cv.addEventListener('touchcancel', e => { e.preventDefault(); pressEnd(); }, { passive: false });
 
   window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; ensureAudio(); });
   window.addEventListener('keyup',   e => { keys[e.key.toLowerCase()] = false; });
@@ -480,11 +471,18 @@
     const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
     last = now;
 
-    // unicorn update — joystick OR WASD/arrows
+    // unicorn update — swim toward the held tap, or WASD/arrows on desktop
     let inX = 0, inY = 0;
-    if (joy.mag > 0) {
-      inX = joy.dx * joy.mag;
-      inY = joy.dy * joy.mag;
+    if (press.active) {
+      const tx = press.sx / ZOOM + camera.x;
+      const ty = press.sy / ZOOM + camera.y;
+      const dx = tx - unicorn.x, dy = ty - unicorn.y;
+      const d = Math.hypot(dx, dy);
+      if (d > ARRIVE_R) {
+        const ramp = Math.min(1, (d - ARRIVE_R) / 60); // ease into / out of full speed
+        inX = (dx / d) * ramp;
+        inY = (dy / d) * ramp;
+      }
     } else {
       if (keys['w'] || keys['arrowup'])    inY -= 1;
       if (keys['s'] || keys['arrowdown'])  inY += 1;
@@ -724,7 +722,7 @@
     const wag = Math.sin(unicorn.wiggle * 1.2) * 8;
 
     // ready-to-move glow — pulses while the screen is held
-    if (joy.active) {
+    if (press.active) {
       const pulse = 0.75 + Math.sin(now / 220) * 0.25;
       const rOuter = 78 * scale;
       const grad = ctx.createRadialGradient(unicorn.x, unicorn.y, 6, unicorn.x, unicorn.y, rOuter);
