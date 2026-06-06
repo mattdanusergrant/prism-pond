@@ -150,6 +150,7 @@
 
   // --- player unicorn (world coords) ---
   const unicorn = { x: WORLD.w / 2, y: WORLD.h / 2, angle: 0, wiggle: 0, speed: 0 };
+  const START = { x: unicorn.x, y: unicorn.y };
   const BASE_SPEED = 180; // px/sec at full joystick deflection
 
   // --- trail ---
@@ -452,6 +453,12 @@
     unicorn.x = clamp(unicorn.x, 40, WORLD.w - 40);
     unicorn.y = clamp(unicorn.y, 40, WORLD.h - 40);
 
+    // fade tutorial hint once the unicorn has left the starting screen
+    if (hintEl.style.opacity !== '0') {
+      const away = Math.hypot(unicorn.x - START.x, unicorn.y - START.y);
+      if (away > Math.min(VW, VH) * 0.45) hintEl.style.opacity = '0';
+    }
+
     // camera follow + clamp
     camera.x += (unicorn.x - VW / 2 - camera.x) * 0.10;
     camera.y += (unicorn.y - VH / 2 - camera.y) * 0.10;
@@ -515,7 +522,6 @@
         burst(z.px, z.py, burstColor, 22, 1.1);
         arpeggio(z.poi === 'crystal' ? [4, 6, 8, 10] : [0, 2, 4]);
         z.cooldownUntil = now + z.cool;
-        hintEl.style.opacity = '0';
       }
     });
 
@@ -587,7 +593,6 @@
           scoreEl.textContent = '⭐ ' + score;
           burst(p.x, p.y, p.color);
           chime(p.idx);
-          if (score >= 6) hintEl.style.opacity = '0';
           continue;
         }
         if (a <= 0.01) continue;
@@ -629,7 +634,6 @@
     ctx.restore();
 
     // UI (screen space)
-    drawJoystick();
     drawMap();
 
     requestAnimationFrame(frame);
@@ -642,6 +646,18 @@
     const scale = big ? 1.7 : 1.0;
     const wig = Math.sin(unicorn.wiggle) * (0.5 + Math.min(unicorn.speed, 300) / 600);
     const wag = Math.sin(unicorn.wiggle * 1.2) * 8;
+
+    // ready-to-move glow — pulses while the screen is held
+    if (joy.active) {
+      const pulse = 0.75 + Math.sin(now / 220) * 0.25;
+      const rOuter = 78 * scale;
+      const grad = ctx.createRadialGradient(unicorn.x, unicorn.y, 6, unicorn.x, unicorn.y, rOuter);
+      grad.addColorStop(0,    `rgba(255,240,180,${0.55 * pulse})`);
+      grad.addColorStop(0.55, `rgba(220,180,255,${0.20 * pulse})`);
+      grad.addColorStop(1,    'rgba(220,180,255,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(unicorn.x, unicorn.y, rOuter, 0, Math.PI * 2); ctx.fill();
+    }
 
     // wake — surface ripples trailing behind, drawn in world space (no rotation)
     const wake = Math.min(0.55, unicorn.speed / 420);
@@ -825,25 +841,6 @@
     ctx.fillText('tap anywhere to close', VW / 2, y0 + mh + 30);
   }
 
-  // --- joystick overlay (screen space) ---
-  function drawJoystick() {
-    if (!joy.active) return;
-    const vx = joy.cx - joy.ax, vy = joy.cy - joy.ay;
-    const m = Math.hypot(vx, vy);
-    const cm = Math.min(m, JOY_MAX);
-    const kx = joy.ax + (m > 0 ? vx / m : 0) * cm;
-    const ky = joy.ay + (m > 0 ? vy / m : 0) * cm;
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(joy.ax, joy.ay, JOY_MAX, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.beginPath(); ctx.arc(kx, ky, 22, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.8)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    ctx.restore();
-  }
 
   function hexA(hex, a) {
     let h = hex.replace('#', '');
