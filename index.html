@@ -154,45 +154,82 @@
   const BASE_SPEED = 90; // px/sec at full joystick deflection
   const ZOOM = 0.7;      // <1 zooms the world out
 
-  // --- trail ---
+  // --- rainbow network: persistent paths connecting start to every zone ---
   const COLORS = ['#ff5577', '#ff8a3d', '#ffd23f', '#7be86c', '#4fc3f7', '#7c6bff', '#c768ff'];
   const POINT_R = 22;
   const BASE_COLLECT_R = 44;
-  const TRAIL_LEN = 28;
-  const FADE_IN = 1.2, HOLD = 3.0, FADE_OUT = 6.0;
+  const DOT_SPACING = 70;     // world units between consecutive dots on a path
+  const RESPAWN_MS = 8000;    // collected dots reappear after this delay
+  const HUB_RADIUS = 90;      // ring of dots around the starting point
 
-  let trail = null;
-  let nextTrailAt = 0;
   let score = 0;
+  const paths = [];
 
-  function makeTrail() {
-    // spawn near unicorn so the whole trail fits inside the visible world chunk
-    const spread = Math.min(VW, VH) * 0.40 / ZOOM;
-    const angA = rand(0, Math.PI * 2);
-    const angB = angA + rand(Math.PI * 0.6, Math.PI * 1.4);
-    const ax = clamp(unicorn.x + Math.cos(angA) * spread, 80, WORLD.w - 80);
-    const ay = clamp(unicorn.y + Math.sin(angA) * spread, 80, WORLD.h - 80);
-    const bx = clamp(unicorn.x + Math.cos(angB) * spread, 80, WORLD.w - 80);
-    const by = clamp(unicorn.y + Math.sin(angB) * spread, 80, WORLD.h - 80);
-    const ccx = (ax + bx) / 2 + rand(-spread * 0.4, spread * 0.4);
-    const ccy = (ay + by) / 2 + rand(-spread * 0.4, spread * 0.4);
-    const pts = [];
-    for (let i = 0; i < TRAIL_LEN; i++) {
-      const t = i / (TRAIL_LEN - 1);
-      const x = (1 - t) * (1 - t) * ax + 2 * (1 - t) * t * ccx + t * t * bx;
-      const y = (1 - t) * (1 - t) * ay + 2 * (1 - t) * t * ccy + t * t * by;
-      pts.push({ x, y, idx: i, offset: -i * 0.04, collected: false, color: COLORS[i % COLORS.length] });
+  function pushBezierPoints(pts, ax, ay, cx, cy, bx, by) {
+    let approxLen = 0, prev = { x: ax, y: ay };
+    for (let s = 1; s <= 12; s++) {
+      const t = s / 12, u = 1 - t;
+      const x = u*u*ax + 2*u*t*cx + t*t*bx;
+      const y = u*u*ay + 2*u*t*cy + t*t*by;
+      approxLen += Math.hypot(x - prev.x, y - prev.y);
+      prev = { x, y };
     }
-    return { points: pts, born: performance.now() };
+    const n = Math.max(4, Math.round(approxLen / DOT_SPACING));
+    for (let i = 0; i < n; i++) {
+      const t = i / (n - 1), u = 1 - t;
+      const x = u*u*ax + 2*u*t*cx + t*t*bx;
+      const y = u*u*ay + 2*u*t*cy + t*t*by;
+      pts.push({ x, y, color: COLORS[(pts.length) % COLORS.length], collected: false, respawnAt: 0 });
+    }
   }
-  function pointAlpha(p, now) {
-    const age = (now - trail.born) / 1000 + p.offset;
-    if (age < 0) return 0;
-    if (age < FADE_IN) return age / FADE_IN;
-    if (age < FADE_IN + HOLD) return 1;
-    const t = (age - FADE_IN - HOLD) / FADE_OUT;
-    return t >= 1 ? 0 : 1 - t;
+
+  function makeEdge(ax, ay, bx, by, curve = 0.22) {
+    const dx = bx - ax, dy = by - ay;
+    const len = Math.hypot(dx, dy) || 1;
+    const px = -dy / len, py = dx / len;
+    const off = (Math.random() - 0.5) * len * curve;
+    const cx = (ax + bx) / 2 + px * off;
+    const cy = (ay + by) / 2 + py * off;
+    const pts = [];
+    pushBezierPoints(pts, ax, ay, cx, cy, bx, by);
+    return { points: pts };
   }
+
+  function makeRing(cx, cy, radius, n) {
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const t = i / n * Math.PI * 2;
+      pts.push({
+        x: cx + Math.cos(t) * radius,
+        y: cy + Math.sin(t) * radius,
+        color: COLORS[i % COLORS.length],
+        collected: false, respawnAt: 0,
+      });
+    }
+    return { points: pts };
+  }
+
+  function buildNetwork() {
+    paths.length = 0;
+    // hub ring at the starting point — always visible, reaches the start
+    paths.push(makeRing(START.x, START.y, HUB_RADIUS, 14));
+    // spokes from the hub edge out to each non-center zone
+    for (let i = 1; i < ZONES.length; i++) {
+      const z = ZONES[i];
+      const ang = Math.atan2(z.cy - START.y, z.cx - START.x);
+      const sx = START.x + Math.cos(ang) * HUB_RADIUS;
+      const sy = START.y + Math.sin(ang) * HUB_RADIUS;
+      paths.push(makeEdge(sx, sy, z.cx, z.cy, 0.18));
+    }
+    // outer ring connecting adjacent zones (Sunshine → Coral → Glowy → Kelp)
+    const ringOrder = [1, 2, 4, 3];
+    for (let i = 0; i < ringOrder.length; i++) {
+      const a = ZONES[ringOrder[i]];
+      const b = ZONES[ringOrder[(i + 1) % ringOrder.length]];
+      paths.push(makeEdge(a.cx, a.cy, b.cx, b.cy, 0.20));
+    }
+  }
+  buildNetwork();
 
   // --- power-ups ---
   const POWERUPS = {
@@ -580,37 +617,37 @@
       ctx.beginPath(); ctx.arc(x - 8, y - 8, 4, 0, Math.PI * 2); ctx.fill();
     }
 
-    // trail spawn + draw + collect
-    if (!trail && now > nextTrailAt) trail = makeTrail();
-    if (trail) {
-      let allDone = true;
-      const collectR = hasPower('big', now) ? BASE_COLLECT_R + 16 : BASE_COLLECT_R;
-      for (let i = 0; i < trail.points.length; i++) {
-        const p = trail.points[i];
-        if (p.collected) continue;
-        const a = pointAlpha(p, now);
-        if (a > 0.02) allDone = false;
-        if (a > 0.15 && Math.hypot(p.x - unicorn.x, p.y - unicorn.y) < collectR) {
+    // rainbow network — persistent dots; collect → respawn after a delay
+    const collectR = hasPower('big', now) ? BASE_COLLECT_R + 16 : BASE_COLLECT_R;
+    const pulse = 0.80 + Math.sin(now / 600) * 0.20;
+    for (let pi = 0; pi < paths.length; pi++) {
+      const path = paths[pi];
+      for (let i = 0; i < path.points.length; i++) {
+        const p = path.points[i];
+        if (p.collected) {
+          if (now >= p.respawnAt) p.collected = false;
+          else continue;
+        }
+        if (Math.hypot(p.x - unicorn.x, p.y - unicorn.y) < collectR) {
           p.collected = true;
+          p.respawnAt = now + RESPAWN_MS;
           score += 1;
           scoreEl.textContent = '⭐ ' + score;
           burst(p.x, p.y, p.color);
-          chime(p.idx);
+          chime(i);
           continue;
         }
-        if (a <= 0.01) continue;
         if (p.x + POINT_R * 2 < camera.x || p.x - POINT_R * 2 > camera.x + vw ||
             p.y + POINT_R * 2 < camera.y || p.y - POINT_R * 2 > camera.y + vh) continue;
         const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, POINT_R * 2);
-        grad.addColorStop(0,    hexA(p.color, a * 0.90));
-        grad.addColorStop(0.55, hexA(p.color, a * 0.30));
+        grad.addColorStop(0,    hexA(p.color, pulse * 0.85));
+        grad.addColorStop(0.55, hexA(p.color, pulse * 0.28));
         grad.addColorStop(1,    hexA(p.color, 0));
         ctx.fillStyle = grad;
         ctx.beginPath(); ctx.arc(p.x, p.y, POINT_R * 2, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = hexA('#ffffff', a * 0.85);
+        ctx.fillStyle = hexA('#ffffff', pulse * 0.80);
         ctx.beginPath(); ctx.arc(p.x, p.y, POINT_R * 0.42, 0, Math.PI * 2); ctx.fill();
       }
-      if (allDone) { trail = null; nextTrailAt = now + 700; }
     }
 
     // sparkle-trail emission (when SPARKLE power-up is active)
