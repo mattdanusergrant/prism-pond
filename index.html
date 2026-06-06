@@ -154,13 +154,13 @@
   const BASE_SPEED = 90; // px/sec at full joystick deflection
   const ZOOM = 0.7;      // <1 zooms the world out
 
-  // --- rainbow network: persistent paths connecting start to every zone ---
+  // --- rainbow road network: persistent strokes connecting start to every zone ---
   const COLORS = ['#ff5577', '#ff8a3d', '#ffd23f', '#7be86c', '#4fc3f7', '#7c6bff', '#c768ff'];
-  const POINT_R = 22;
-  const BASE_COLLECT_R = 44;
-  const DOT_SPACING = 70;     // world units between consecutive dots on a path
-  const RESPAWN_MS = 8000;    // collected dots reappear after this delay
-  const HUB_RADIUS = 90;      // ring of dots around the starting point
+  const ROAD_WIDTH = 28;      // world units (stroke width)
+  const ROAD_GRIP  = 22;      // distance from centerline that still counts as "on road"
+  const DOT_SPACING = 70;     // world units between sampled bezier nodes
+  const HUB_RADIUS  = 110;    // ring of road around the starting point
+  const ROAD_BOOST  = 2.0;    // speed multiplier when travelling on a road
 
   let score = 0;
   const paths = [];
@@ -179,7 +179,7 @@
       const t = i / (n - 1), u = 1 - t;
       const x = u*u*ax + 2*u*t*cx + t*t*bx;
       const y = u*u*ay + 2*u*t*cy + t*t*by;
-      pts.push({ x, y, color: COLORS[(pts.length) % COLORS.length], collected: false, respawnAt: 0 });
+      pts.push({ x, y, color: COLORS[pts.length % COLORS.length] });
     }
   }
 
@@ -192,7 +192,7 @@
     const cy = (ay + by) / 2 + py * off;
     const pts = [];
     pushBezierPoints(pts, ax, ay, cx, cy, bx, by);
-    return { points: pts };
+    return { points: pts, closed: false };
   }
 
   function makeRing(cx, cy, radius, n) {
@@ -203,16 +203,15 @@
         x: cx + Math.cos(t) * radius,
         y: cy + Math.sin(t) * radius,
         color: COLORS[i % COLORS.length],
-        collected: false, respawnAt: 0,
       });
     }
-    return { points: pts };
+    return { points: pts, closed: true };
   }
 
   function buildNetwork() {
     paths.length = 0;
-    // hub ring at the starting point — always visible, reaches the start
-    paths.push(makeRing(START.x, START.y, HUB_RADIUS, 14));
+    // hub ring at the starting point — always reaches the start
+    paths.push(makeRing(START.x, START.y, HUB_RADIUS, 18));
     // spokes from the hub edge out to each non-center zone
     for (let i = 1; i < ZONES.length; i++) {
       const z = ZONES[i];
@@ -221,7 +220,7 @@
       const sy = START.y + Math.sin(ang) * HUB_RADIUS;
       paths.push(makeEdge(sx, sy, z.cx, z.cy, 0.18));
     }
-    // outer ring connecting adjacent zones (Sunshine → Coral → Glowy → Kelp)
+    // outer ring connecting adjacent zones (Sunshine -> Coral -> Glowy -> Kelp)
     const ringOrder = [1, 2, 4, 3];
     for (let i = 0; i < ringOrder.length; i++) {
       const a = ZONES[ringOrder[i]];
@@ -230,6 +229,29 @@
     }
   }
   buildNetwork();
+
+  function distToSegment(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay;
+    const l2 = dx * dx + dy * dy;
+    if (l2 < 0.0001) return Math.hypot(px - ax, py - ay);
+    let t = ((px - ax) * dx + (py - ay) * dy) / l2;
+    if (t < 0) t = 0; else if (t > 1) t = 1;
+    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  }
+
+  function isOnRoad(x, y) {
+    for (let pi = 0; pi < paths.length; pi++) {
+      const path = paths[pi];
+      const pts = path.points;
+      const n = pts.length;
+      const last = path.closed ? n : n - 1;
+      for (let i = 0; i < last; i++) {
+        const a = pts[i], b = pts[(i + 1) % n];
+        if (distToSegment(x, y, a.x, a.y, b.x, b.y) < ROAD_GRIP) return true;
+      }
+    }
+    return false;
+  }
 
   // --- power-ups ---
   const POWERUPS = {
@@ -481,8 +503,9 @@
       if (km > 1) { inX /= km; inY /= km; }
     }
     const speedMul = hasPower('fast', now) ? 1.7 : 1.0;
-    const vx = inX * BASE_SPEED * speedMul;
-    const vy = inY * BASE_SPEED * speedMul;
+    const roadMul  = isOnRoad(unicorn.x, unicorn.y) ? ROAD_BOOST : 1.0;
+    const vx = inX * BASE_SPEED * speedMul * roadMul;
+    const vy = inY * BASE_SPEED * speedMul * roadMul;
     unicorn.x += vx * dt;
     unicorn.y += vy * dt;
     unicorn.speed = Math.hypot(vx, vy);
@@ -617,36 +640,53 @@
       ctx.beginPath(); ctx.arc(x - 8, y - 8, 4, 0, Math.PI * 2); ctx.fill();
     }
 
-    // rainbow network — persistent dots; collect → respawn after a delay
-    const collectR = hasPower('big', now) ? BASE_COLLECT_R + 16 : BASE_COLLECT_R;
-    const pulse = 0.80 + Math.sin(now / 600) * 0.20;
+    // rainbow roads — persistent strokes; double speed when travelled
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const segCull = ROAD_WIDTH * 1.5;
+    // outer glow pass
+    ctx.lineWidth = ROAD_WIDTH * 1.9;
     for (let pi = 0; pi < paths.length; pi++) {
       const path = paths[pi];
-      for (let i = 0; i < path.points.length; i++) {
-        const p = path.points[i];
-        if (p.collected) {
-          if (now >= p.respawnAt) p.collected = false;
-          else continue;
-        }
-        if (Math.hypot(p.x - unicorn.x, p.y - unicorn.y) < collectR) {
-          p.collected = true;
-          p.respawnAt = now + RESPAWN_MS;
-          score += 1;
-          scoreEl.textContent = '⭐ ' + score;
-          burst(p.x, p.y, p.color);
-          chime(i);
-          continue;
-        }
-        if (p.x + POINT_R * 2 < camera.x || p.x - POINT_R * 2 > camera.x + vw ||
-            p.y + POINT_R * 2 < camera.y || p.y - POINT_R * 2 > camera.y + vh) continue;
-        const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, POINT_R * 2);
-        grad.addColorStop(0,    hexA(p.color, pulse * 0.85));
-        grad.addColorStop(0.55, hexA(p.color, pulse * 0.28));
-        grad.addColorStop(1,    hexA(p.color, 0));
-        ctx.fillStyle = grad;
-        ctx.beginPath(); ctx.arc(p.x, p.y, POINT_R * 2, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = hexA('#ffffff', pulse * 0.80);
-        ctx.beginPath(); ctx.arc(p.x, p.y, POINT_R * 0.42, 0, Math.PI * 2); ctx.fill();
+      const pts = path.points;
+      const n = pts.length;
+      const last = path.closed ? n : n - 1;
+      for (let i = 0; i < last; i++) {
+        const a = pts[i], b = pts[(i + 1) % n];
+        if (Math.max(a.x, b.x) + segCull < camera.x || Math.min(a.x, b.x) - segCull > camera.x + vw ||
+            Math.max(a.y, b.y) + segCull < camera.y || Math.min(a.y, b.y) - segCull > camera.y + vh) continue;
+        ctx.strokeStyle = hexA(a.color, 0.22);
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+    }
+    // solid colour core
+    ctx.lineWidth = ROAD_WIDTH;
+    for (let pi = 0; pi < paths.length; pi++) {
+      const path = paths[pi];
+      const pts = path.points;
+      const n = pts.length;
+      const last = path.closed ? n : n - 1;
+      for (let i = 0; i < last; i++) {
+        const a = pts[i], b = pts[(i + 1) % n];
+        if (Math.max(a.x, b.x) + segCull < camera.x || Math.min(a.x, b.x) - segCull > camera.x + vw ||
+            Math.max(a.y, b.y) + segCull < camera.y || Math.min(a.y, b.y) - segCull > camera.y + vh) continue;
+        ctx.strokeStyle = a.color;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+    }
+    // thin white centre-line for that polished-road feel
+    ctx.lineWidth = ROAD_WIDTH * 0.18;
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    for (let pi = 0; pi < paths.length; pi++) {
+      const path = paths[pi];
+      const pts = path.points;
+      const n = pts.length;
+      const last = path.closed ? n : n - 1;
+      for (let i = 0; i < last; i++) {
+        const a = pts[i], b = pts[(i + 1) % n];
+        if (Math.max(a.x, b.x) + segCull < camera.x || Math.min(a.x, b.x) - segCull > camera.x + vw ||
+            Math.max(a.y, b.y) + segCull < camera.y || Math.min(a.y, b.y) - segCull > camera.y + vh) continue;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
       }
     }
 
