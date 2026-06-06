@@ -166,8 +166,8 @@
   let score = 0;
 
   function makeTrail() {
-    // spawn near fish so it's always visible in the viewport
-    const spread = Math.max(VW, VH) * 0.55 / ZOOM;
+    // spawn near unicorn so the whole trail fits inside the visible world chunk
+    const spread = Math.min(VW, VH) * 0.40 / ZOOM;
     const angA = rand(0, Math.PI * 2);
     const angB = angA + rand(Math.PI * 0.6, Math.PI * 1.4);
     const ax = clamp(unicorn.x + Math.cos(angA) * spread, 80, WORLD.w - 80);
