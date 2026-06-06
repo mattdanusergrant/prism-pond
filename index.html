@@ -14,6 +14,8 @@
   #hint   { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); color: #cdebff; font: 500 16px system-ui, -apple-system, sans-serif; text-shadow: 0 1px 4px rgba(0,0,0,.4); pointer-events: none; user-select: none; opacity: .85; transition: opacity 1.2s ease; text-align: center; }
   #badges { position: fixed; top: 46px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; pointer-events: none; user-select: none; }
   .badge  { padding: 5px 11px; border-radius: 14px; font: 700 13px system-ui, -apple-system, sans-serif; box-shadow: 0 2px 6px rgba(0,0,0,.35); color: #2a1a05; }
+  #mapBtn { position: fixed; top: 12px; right: 12px; width: 44px; height: 44px; border: 0; border-radius: 50%; background: rgba(8,30,45,.65); color: #fff; font-size: 22px; line-height: 1; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; box-shadow: 0 2px 6px rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; padding: 0; z-index: 5; }
+  #mapBtn:active { transform: scale(.94); }
 </style>
 </head>
 <body>
@@ -22,6 +24,7 @@
 <div id="zone"></div>
 <div id="badges"></div>
 <div id="hint">tap and drag anywhere to swim — chase the rainbow!</div>
+<button id="mapBtn" aria-label="Open map" title="Map">🗺</button>
 <script>
 (() => {
   const cv = document.getElementById('c');
@@ -122,7 +125,7 @@
     joy.dy = vy / m;
     joy.mag = Math.min(m, JOY_MAX) / JOY_MAX;
   }
-  function joyStart(sx, sy) { joy.active = true; joy.ax = sx; joy.ay = sy; joy.cx = sx; joy.cy = sy; joyUpdate(); ensureAudio(); }
+  function joyStart(sx, sy) { if (mapOpen) { mapOpen = false; return; } joy.active = true; joy.ax = sx; joy.ay = sy; joy.cx = sx; joy.cy = sy; joyUpdate(); ensureAudio(); }
   function joyMove (sx, sy) { if (!joy.active) return; joy.cx = sx; joy.cy = sy; joyUpdate(); }
   function joyEnd()         { joy.active = false; joy.dx = 0; joy.dy = 0; joy.mag = 0; }
 
@@ -138,9 +141,16 @@
   window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; ensureAudio(); });
   window.addEventListener('keyup',   e => { keys[e.key.toLowerCase()] = false; });
 
+  // --- map menu ---
+  const mapBtn = document.getElementById('mapBtn');
+  let mapOpen = false;
+  mapBtn.addEventListener('click',     e => { e.stopPropagation(); mapOpen = !mapOpen; });
+  mapBtn.addEventListener('mousedown', e => { e.stopPropagation(); });
+  mapBtn.addEventListener('touchstart',e => { e.stopPropagation(); e.preventDefault(); mapOpen = !mapOpen; }, { passive: false });
+
   // --- player unicorn (world coords) ---
   const unicorn = { x: WORLD.w / 2, y: WORLD.h / 2, angle: 0, wiggle: 0, speed: 0 };
-  const BASE_SPEED = 360; // px/sec at full joystick deflection
+  const BASE_SPEED = 180; // px/sec at full joystick deflection
 
   // --- trail ---
   const COLORS = ['#ff5577', '#ff8a3d', '#ffd23f', '#7be86c', '#4fc3f7', '#7c6bff', '#c768ff'];
@@ -620,6 +630,7 @@
 
     // UI (screen space)
     drawJoystick();
+    drawMap();
 
     requestAnimationFrame(frame);
   }
@@ -745,6 +756,73 @@
     ctx.beginPath(); ctx.arc(19, 1, 2, 0, Math.PI * 2); ctx.fill();
 
     ctx.restore();
+  }
+
+  // --- map overlay (screen space) ---
+  function drawMap() {
+    if (!mapOpen) return;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, VW, VH);
+
+    const pad = 36;
+    const maxW = VW - pad * 2;
+    const maxH = VH - pad * 2 - 80;
+    const ratio = WORLD.w / WORLD.h;
+    let mw = maxW, mh = mw / ratio;
+    if (mh > maxH) { mh = maxH; mw = mh * ratio; }
+    const x0 = (VW - mw) / 2;
+    const y0 = (VH - mh) / 2;
+
+    // panel background
+    const r = 14;
+    const px = x0 - 10, py = y0 - 10, pw = mw + 20, ph = mh + 20;
+    ctx.fillStyle = 'rgba(8,30,45,0.92)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.30)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px + r, py);
+    ctx.arcTo(px + pw, py, px + pw, py + ph, r);
+    ctx.arcTo(px + pw, py + ph, px, py + ph, r);
+    ctx.arcTo(px, py + ph, px, py, r);
+    ctx.arcTo(px, py, px + pw, py, r);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+
+    const sx = mw / WORLD.w, sy = mh / WORLD.h;
+
+    ZONES.forEach(z => {
+      const zx = x0 + z.cx * sx;
+      const zy = y0 + z.cy * sy;
+      const zr = z.r * Math.min(sx, sy);
+      ctx.globalAlpha = 0.55;
+      ctx.fillStyle = z.color;
+      ctx.beginPath(); ctx.arc(zx, zy, zr, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.font = '600 12px system-ui, -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(z.name, zx, zy - zr - 6);
+    });
+    ZONES.forEach(z => {
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(x0 + z.px * sx, y0 + z.py * sy, 4, 0, Math.PI * 2); ctx.fill();
+    });
+    bubbles.forEach(p => {
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(x0 + p.x * sx, y0 + p.y * sy, 2, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x0 + camera.x * sx, y0 + camera.y * sy, VW * sx, VH * sy);
+
+    ctx.fillStyle = '#ffcb6b';
+    ctx.beginPath(); ctx.arc(x0 + unicorn.x * sx, y0 + unicorn.y * sy, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.font = '500 14px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('tap anywhere to close', VW / 2, y0 + mh + 30);
   }
 
   // --- joystick overlay (screen space) ---
