@@ -151,7 +151,8 @@
   // --- player unicorn (world coords) ---
   const unicorn = { x: WORLD.w / 2, y: WORLD.h / 2, angle: 0, wiggle: 0, speed: 0 };
   const START = { x: unicorn.x, y: unicorn.y };
-  const BASE_SPEED = 180; // px/sec at full joystick deflection
+  const BASE_SPEED = 90; // px/sec at full joystick deflection
+  const ZOOM = 0.7;      // <1 zooms the world out
 
   // --- trail ---
   const COLORS = ['#ff5577', '#ff8a3d', '#ffd23f', '#7be86c', '#4fc3f7', '#7c6bff', '#c768ff'];
@@ -166,7 +167,7 @@
 
   function makeTrail() {
     // spawn near fish so it's always visible in the viewport
-    const spread = Math.max(VW, VH) * 0.55;
+    const spread = Math.max(VW, VH) * 0.55 / ZOOM;
     const angA = rand(0, Math.PI * 2);
     const angB = angA + rand(Math.PI * 0.6, Math.PI * 1.4);
     const ax = clamp(unicorn.x + Math.cos(angA) * spread, 80, WORLD.w - 80);
@@ -456,14 +457,15 @@
     // fade tutorial hint once the unicorn has left the starting screen
     if (hintEl.style.opacity !== '0') {
       const away = Math.hypot(unicorn.x - START.x, unicorn.y - START.y);
-      if (away > Math.min(VW, VH) * 0.45) hintEl.style.opacity = '0';
+      if (away > Math.min(VW, VH) * 0.45 / ZOOM) hintEl.style.opacity = '0';
     }
 
-    // camera follow + clamp
-    camera.x += (unicorn.x - VW / 2 - camera.x) * 0.10;
-    camera.y += (unicorn.y - VH / 2 - camera.y) * 0.10;
-    camera.x = clamp(camera.x, 0, Math.max(0, WORLD.w - VW));
-    camera.y = clamp(camera.y, 0, Math.max(0, WORLD.h - VH));
+    // camera follow + clamp — viewport in world units = VW/ZOOM × VH/ZOOM
+    const vw = VW / ZOOM, vh = VH / ZOOM;
+    camera.x += (unicorn.x - vw / 2 - camera.x) * 0.10;
+    camera.y += (unicorn.y - vh / 2 - camera.y) * 0.10;
+    camera.x = clamp(camera.x, 0, Math.max(0, WORLD.w - vw));
+    camera.y = clamp(camera.y, 0, Math.max(0, WORLD.h - vh));
 
     pruneActive(now);
     updateZoneLabel(now);
@@ -473,12 +475,13 @@
     ctx.fillRect(0, 0, VW, VH);
 
     ctx.save();
+    ctx.scale(ZOOM, ZOOM);
     ctx.translate(-camera.x, -camera.y);
 
     // zone gradient tints
     ZONES.forEach(z => {
-      if (z.cx + z.r < camera.x || z.cx - z.r > camera.x + VW ||
-          z.cy + z.r < camera.y || z.cy - z.r > camera.y + VH) return;
+      if (z.cx + z.r < camera.x || z.cx - z.r > camera.x + vw ||
+          z.cy + z.r < camera.y || z.cy - z.r > camera.y + vh) return;
       const grad = ctx.createRadialGradient(z.cx, z.cy, 0, z.cx, z.cy, z.r);
       grad.addColorStop(0, z.tint);
       grad.addColorStop(1, 'rgba(8,43,58,0)');
@@ -489,8 +492,8 @@
     // ambient ripples (near fish so always visible)
     if (now > nextRippleAt) {
       ripples.push({
-        x: unicorn.x + rand(-VW * 0.8, VW * 0.8),
-        y: unicorn.y + rand(-VH * 0.8, VH * 0.8),
+        x: unicorn.x + rand(-vw * 0.8, vw * 0.8),
+        y: unicorn.y + rand(-vh * 0.8, vh * 0.8),
         life: 0, max: rand(2.5, 4.0), grow: rand(28, 55),
       });
       nextRippleAt = now + rand(450, 1300);
@@ -507,8 +510,8 @@
 
     // POIs in view + touch reward
     ZONES.forEach(z => {
-      const inView = !(z.px + 320 < camera.x || z.px - 320 > camera.x + VW ||
-                       z.py + 320 < camera.y || z.py - 320 > camera.y + VH);
+      const inView = !(z.px + 320 < camera.x || z.px - 320 > camera.x + vw ||
+                       z.py + 320 < camera.y || z.py - 320 > camera.y + vh);
       if (inView) drawPOI(z, now);
       // proximity reward (anywhere — works even if POI is just offscreen)
       if (now >= z.cooldownUntil && Math.hypot(z.px - unicorn.x, z.py - unicorn.y) < z.touchR) {
@@ -537,8 +540,8 @@
         continue;
       }
       // skip offscreen
-      if (b.x + 40 < camera.x || b.x - 40 > camera.x + VW ||
-          b.y + 40 < camera.y || b.y - 40 > camera.y + VH) continue;
+      if (b.x + 40 < camera.x || b.x - 40 > camera.x + vw ||
+          b.y + 40 < camera.y || b.y - 40 > camera.y + vh) continue;
       b.bob += dt;
       const yo = Math.sin(b.bob * 1.5) * 5;
       const x = b.x, y = b.y + yo;
@@ -596,8 +599,8 @@
           continue;
         }
         if (a <= 0.01) continue;
-        if (p.x + POINT_R * 2 < camera.x || p.x - POINT_R * 2 > camera.x + VW ||
-            p.y + POINT_R * 2 < camera.y || p.y - POINT_R * 2 > camera.y + VH) continue;
+        if (p.x + POINT_R * 2 < camera.x || p.x - POINT_R * 2 > camera.x + vw ||
+            p.y + POINT_R * 2 < camera.y || p.y - POINT_R * 2 > camera.y + vh) continue;
         const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, POINT_R * 2);
         grad.addColorStop(0,    hexA(p.color, a * 0.90));
         grad.addColorStop(0.55, hexA(p.color, a * 0.30));
@@ -829,7 +832,7 @@
     });
     ctx.strokeStyle = 'rgba(255,255,255,0.35)';
     ctx.lineWidth = 1;
-    ctx.strokeRect(x0 + camera.x * sx, y0 + camera.y * sy, VW * sx, VH * sy);
+    ctx.strokeRect(x0 + camera.x * sx, y0 + camera.y * sy, (VW / ZOOM) * sx, (VH / ZOOM) * sy);
 
     ctx.fillStyle = '#ffcb6b';
     ctx.beginPath(); ctx.arc(x0 + unicorn.x * sx, y0 + unicorn.y * sy, 5, 0, Math.PI * 2); ctx.fill();
