@@ -95,8 +95,13 @@
     { name: 'Coral Garden',      cx: WORLD.w * 0.88, cy: WORLD.h * 0.55, r: 760, color: '#c84e6c', tint: 'rgba(230,110,150,0.42)', poi: 'coral',   stars: 5,  cool: 6000  },
     { name: 'Kelp Forest',       cx: WORLD.w * 0.12, cy: WORLD.h * 0.55, r: 760, color: '#2c6b4e', tint: 'rgba( 60,160,110,0.45)', poi: 'kelp',    stars: 3,  cool: 7000  },
     { name: 'Glowy Cave',        cx: WORLD.w * 0.50, cy: WORLD.h * 0.88, r: 720, color: '#3a2880', tint: 'rgba(120, 90,230,0.50)', poi: 'crystal', stars: 10, cool: 10000 },
+    { name: 'Pearl Cove',        cx: WORLD.w * 0.18, cy: WORLD.h * 0.20, r: 680, color: '#9c7fc7', tint: 'rgba(220,210,255,0.40)', poi: 'pearl',   stars: 5,  cool: 6000  },
+    { name: 'Music Reef',        cx: WORLD.w * 0.82, cy: WORLD.h * 0.22, r: 700, color: '#3c8bbf', tint: 'rgba(120,200,240,0.42)', poi: 'music',   stars: 4,  cool: 5000  },
+    { name: 'Star Pool',         cx: WORLD.w * 0.18, cy: WORLD.h * 0.82, r: 700, color: '#1c1f48', tint: 'rgba( 80,100,200,0.42)', poi: 'stars',   stars: 7,  cool: 7000  },
+    { name: 'Bubble Falls',      cx: WORLD.w * 0.82, cy: WORLD.h * 0.78, r: 680, color: '#3aa0a8', tint: 'rgba(140,220,230,0.42)', poi: 'falls',   stars: 4,  cool: 5000  },
+    { name: 'Fog Patch',         cx: WORLD.w * 0.30, cy: WORLD.h * 0.65, r: 600, color: '#586878', tint: 'rgba(180,200,220,0.45)', poi: 'fog',     stars: 3,  cool: 5000  },
   ];
-  ZONES.forEach(z => { z.px = z.cx; z.py = z.cy; z.cooldownUntil = 0; z.touchR = 80; });
+  ZONES.forEach(z => { z.px = z.cx; z.py = z.cy; z.cooldownUntil = 0; z.touchR = 120; z.visited = false; });
 
   function zoneAt(x, y) {
     let best = null, bestD = Infinity;
@@ -230,17 +235,18 @@
   function buildNetwork() {
     paths.length = 0;
     paths.push(makeRing(START.x, START.y, HUB_RADIUS, 22));
-    for (let i = 1; i < ZONES.length; i++) {
-      const z = ZONES[i];
-      const ang = Math.atan2(z.cy - START.y, z.cx - START.x);
+    // every non-centre zone gets a spoke + sit on an outer ring sorted by angle
+    const outer = ZONES.slice(1)
+      .map(z => ({ z, ang: Math.atan2(z.cy - START.y, z.cx - START.x) }))
+      .sort((a, b) => a.ang - b.ang);
+    for (const { z, ang } of outer) {
       const sx = START.x + Math.cos(ang) * HUB_RADIUS;
       const sy = START.y + Math.sin(ang) * HUB_RADIUS;
       paths.push(makeEdge(sx, sy, z.cx, z.cy));
     }
-    const ringOrder = [1, 2, 4, 3];
-    for (let i = 0; i < ringOrder.length; i++) {
-      const a = ZONES[ringOrder[i]];
-      const b = ZONES[ringOrder[(i + 1) % ringOrder.length]];
+    for (let i = 0; i < outer.length; i++) {
+      const a = outer[i].z;
+      const b = outer[(i + 1) % outer.length].z;
       paths.push(makeEdge(a.cx, a.cy, b.cx, b.cy));
     }
   }
@@ -289,6 +295,85 @@
     });
   }
   for (let i = 0; i < BUBBLE_COUNT; i++) spawnBubble();
+
+  // --- schools of fish wandering the pond ---
+  const SCHOOL_COUNT = 30;
+  const FISH_PER_SCHOOL = 8;
+  const SCHOOL_COLORS = ['#ffd23f', '#ff8a3d', '#7be86c', '#4fc3f7', '#c768ff', '#ff6bd1'];
+  const schools = [];
+  function makeSchool() {
+    const cx = rand(600, WORLD.w - 600);
+    const cy = rand(600, WORLD.h - 600);
+    const color = SCHOOL_COLORS[Math.floor(Math.random() * SCHOOL_COLORS.length)];
+    const fish = [];
+    for (let i = 0; i < FISH_PER_SCHOOL; i++) {
+      fish.push({
+        x: cx + rand(-80, 80), y: cy + rand(-80, 80),
+        ang: rand(0, Math.PI * 2),
+        phase: rand(0, Math.PI * 2),
+      });
+    }
+    return { cx, cy, tcx: cx, tcy: cy, drift: rand(0, Math.PI * 2), color, fish };
+  }
+  for (let i = 0; i < SCHOOL_COUNT; i++) schools.push(makeSchool());
+
+  // --- one slow drifting whale ---
+  const whale = { x: WORLD.w * 0.3, y: WORLD.h * 0.7, ang: 0, t: rand(0, 10), spoutAt: 0 };
+
+  // --- frogs perched on Sunshine Shallows lily pads ---
+  const frogs = [];
+  (function spawnFrogs() {
+    const sunshine = ZONES.find(z => z.poi === 'lilypad');
+    if (!sunshine) return;
+    const offsets = [[0,0],[-110,-50],[90,-80],[-60,100],[130,70]];
+    for (const [ox, oy] of offsets) {
+      frogs.push({ x: sunshine.cx + ox, y: sunshine.cy + oy - 4, hop: 0, hopUntil: 0 });
+    }
+  })();
+
+  // --- scattered tiny scenes for off-path delight ---
+  const SCENES = [
+    { kind: 'bottle',  x: WORLD.w * 0.35, y: WORLD.h * 0.25, msg: 'a message in a bottle — "swim brave, little one"', found: false },
+    { kind: 'bouquet', x: WORLD.w * 0.62, y: WORLD.h * 0.33, msg: 'a drifting bouquet',                                 found: false },
+    { kind: 'boat',    x: WORLD.w * 0.40, y: WORLD.h * 0.72, msg: 'a tiny paper boat',                                  found: false },
+    { kind: 'teacup',  x: WORLD.w * 0.72, y: WORLD.h * 0.62, msg: 'a sunken teacup, half full of pearls',               found: false },
+    { kind: 'heart',   x: WORLD.w * 0.15, y: WORLD.h * 0.40, msg: 'a heart-shaped lily pad',                            found: false },
+    { kind: 'shell',   x: WORLD.w * 0.86, y: WORLD.h * 0.42, msg: 'a rainbow shell — your mane glints anew',            found: false },
+    { kind: 'shell',   x: WORLD.w * 0.50, y: WORLD.h * 0.95, msg: 'another rainbow shell',                              found: false },
+    { kind: 'shell',   x: WORLD.w * 0.05, y: WORLD.h * 0.95, msg: 'another rainbow shell',                              found: false },
+  ];
+  let maneShellsFound = 0;
+  const MANE_PALETTES = [
+    null, // default: COLORS
+    ['#ff8a3d', '#ffd23f', '#ff8a3d', '#ffd23f', '#ff8a3d', '#ffd23f', '#ff8a3d'], // sunset
+    ['#7be86c', '#4fc3f7', '#7be86c', '#4fc3f7', '#7be86c', '#4fc3f7', '#7be86c'], // meadow
+    ['#ff6bd1', '#c768ff', '#ff6bd1', '#c768ff', '#ff6bd1', '#c768ff', '#ff6bd1'], // berry
+  ];
+  function manePalette() { return MANE_PALETTES[maneShellsFound % MANE_PALETTES.length] || COLORS; }
+
+  // --- floating message overlay (screen-space) ---
+  let floatMsg = '';
+  let floatMsgEnd = 0;
+  function showMessage(text, ms = 3500) { floatMsg = text; floatMsgEnd = performance.now() + ms; }
+
+  // --- day/night cycle ---
+  const DAY_DURATION_MS = 240000; // 4 minute full cycle
+  const SKY_STOPS = [
+    { t: 0.00, c: [42, 28, 50] },  // dawn pink
+    { t: 0.18, c: [12, 60, 80] },  // morning cyan
+    { t: 0.40, c: [ 8, 43, 58] },  // bright day (original pond blue)
+    { t: 0.55, c: [55, 30, 60] },  // dusk
+    { t: 0.75, c: [ 6, 14, 36] },  // night
+    { t: 1.00, c: [42, 28, 50] },  // wrap
+  ];
+  function skyColour(now) {
+    const t = (now / DAY_DURATION_MS) % 1;
+    let i = 0;
+    while (i < SKY_STOPS.length - 1 && SKY_STOPS[i + 1].t < t) i++;
+    const a = SKY_STOPS[i], b = SKY_STOPS[i + 1];
+    const u = (t - a.t) / (b.t - a.t);
+    return [0,1,2].map(k => Math.round(a.c[k] * (1 - u) + b.c[k] * u));
+  }
 
   // --- particles ---
   const particles = [];
@@ -446,6 +531,87 @@
         ctx.lineTo(cx, cy + c[3] / 2);
         ctx.closePath(); ctx.fill();
       });
+    } else if (z.poi === 'pearl') {
+      // cluster of glowing pearls
+      const pearls = [[0,0,28],[-60,-30,18],[55,-40,22],[-35,55,16],[60,40,20],[-90,10,14]];
+      pearls.forEach((p, i) => {
+        const bob = Math.sin(t * 1.4 + i) * 3;
+        const cx = x + p[0], cy = y + p[1] + bob, pr = p[2];
+        const grad = ctx.createRadialGradient(cx - pr*0.3, cy - pr*0.3, 1, cx, cy, pr);
+        grad.addColorStop(0, `rgba(255,255,255,${0.95 * dim})`);
+        grad.addColorStop(0.5, `rgba(230,210,255,${0.85 * dim})`);
+        grad.addColorStop(1, `rgba(160,130,210,${dim})`);
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(cx, cy, pr, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = `rgba(255,255,255,${0.75 * dim})`;
+        ctx.beginPath(); ctx.arc(cx - pr*0.35, cy - pr*0.35, pr*0.18, 0, Math.PI * 2); ctx.fill();
+      });
+    } else if (z.poi === 'music') {
+      // coral reef with floating notes
+      ctx.fillStyle = `rgba(100,180,220,${dim})`;
+      const reefs = [[-80,40,30],[-20,50,26],[40,45,28],[100,40,24]];
+      reefs.forEach(r => {
+        ctx.beginPath(); ctx.ellipse(x + r[0], y + r[1], r[2], r[2]*0.6, 0, 0, Math.PI * 2); ctx.fill();
+      });
+      const notes = [[-70,-30,0],[-20,-60,1],[30,-50,2],[80,-30,3]];
+      notes.forEach((n, i) => {
+        const bob = Math.sin(t * 1.6 + i) * 8;
+        const nx = x + n[0], ny = y + n[1] + bob;
+        ctx.fillStyle = `rgba(255,235,120,${dim})`;
+        ctx.beginPath(); ctx.ellipse(nx, ny, 7, 5, -0.3, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = `rgba(255,235,120,${dim})`;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(nx + 5, ny - 2); ctx.lineTo(nx + 7, ny - 22); ctx.stroke();
+      });
+    } else if (z.poi === 'stars') {
+      // starfield with constellation lines
+      const stars = [[0,0],[-60,-40],[40,-60],[-90,30],[80,20],[20,70],[-30,-90],[100,-30]];
+      ctx.strokeStyle = `rgba(140,180,255,${0.55 * dim})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      stars.forEach((s, i) => {
+        const sx = x + s[0], sy = y + s[1];
+        if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+      });
+      ctx.stroke();
+      stars.forEach((s, i) => {
+        const twinkle = 0.6 + Math.sin(t * 2 + i * 1.3) * 0.4;
+        const sx = x + s[0], sy = y + s[1];
+        const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, 18);
+        grad.addColorStop(0, `rgba(255,255,255,${twinkle * dim})`);
+        grad.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(sx, sy, 18, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = `rgba(255,255,255,${dim})`;
+        ctx.beginPath(); ctx.arc(sx, sy, 2.5, 0, Math.PI * 2); ctx.fill();
+      });
+    } else if (z.poi === 'falls') {
+      // rising column of bubbles
+      ctx.fillStyle = `rgba(160,220,235,${0.35 * dim})`;
+      ctx.beginPath(); ctx.ellipse(x, y + 80, 90, 24, 0, 0, Math.PI * 2); ctx.fill();
+      for (let i = 0; i < 18; i++) {
+        const phase = (t * 0.5 + i * 0.17) % 1;
+        const bx = x + Math.sin(t * 0.8 + i) * 28;
+        const by = y + 80 - phase * 220;
+        const r = 4 + (1 - phase) * 6;
+        ctx.fillStyle = `rgba(220,240,250,${(1 - phase) * dim})`;
+        ctx.beginPath(); ctx.arc(bx, by, r, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = `rgba(255,255,255,${(1 - phase) * 0.55 * dim})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(bx, by, r, 0, Math.PI * 2); ctx.stroke();
+      }
+    } else if (z.poi === 'fog') {
+      // drifting fog clouds
+      for (let i = 0; i < 6; i++) {
+        const phase = t * 0.15 + i;
+        const fx = x + Math.cos(phase) * 90;
+        const fy = y + Math.sin(phase * 0.7 + i) * 50;
+        const grad = ctx.createRadialGradient(fx, fy, 0, fx, fy, 90);
+        grad.addColorStop(0, `rgba(220,225,235,${0.32 * dim})`);
+        grad.addColorStop(1, 'rgba(220,225,235,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(fx, fy, 90, 0, Math.PI * 2); ctx.fill();
+      }
     }
   }
 
@@ -520,8 +686,9 @@
 
     updateZoneLabel(now);
 
-    // --- background ---
-    ctx.fillStyle = '#082b3a';
+    // --- background — time of day shifts the pond ---
+    const sky = skyColour(now);
+    ctx.fillStyle = `rgb(${sky[0]},${sky[1]},${sky[2]})`;
     ctx.fillRect(0, 0, VW, VH);
 
     ctx.save();
@@ -571,10 +738,23 @@
                          : z.poi === 'lilypad' ? '#ffeaff'
                          : z.poi === 'coral'   ? '#ff8aa8'
                          : z.poi === 'kelp'    ? '#7be86c'
-                         :                       '#c4a8ff';
+                         : z.poi === 'crystal' ? '#c4a8ff'
+                         : z.poi === 'pearl'   ? '#e8dcff'
+                         : z.poi === 'music'   ? '#ffe680'
+                         : z.poi === 'stars'   ? '#a8c8ff'
+                         : z.poi === 'falls'   ? '#cfeef5'
+                         :                       '#dde4ec';
         burst(z.px, z.py, burstColor, 22, 1.1);
-        arpeggio(z.poi === 'crystal' ? [4, 6, 8, 10] : [0, 2, 4]);
+        const arp = z.poi === 'crystal' ? [4, 6, 8, 10]
+                  : z.poi === 'stars'   ? [6, 8, 10, 12]
+                  : z.poi === 'music'   ? [0, 2, 4, 6]
+                  : z.poi === 'falls'   ? [0, 1, 2, 3]
+                  : z.poi === 'pearl'   ? [2, 4, 6]
+                  : z.poi === 'fog'     ? [1, 3, 5]
+                  :                       [0, 2, 4];
+        arpeggio(arp);
         z.cooldownUntil = now + z.cool;
+        if (!z.visited) { z.visited = true; showMessage('★ ' + z.name + ' discovered'); }
       }
     });
 
@@ -690,6 +870,208 @@
     }
 
 
+    // --- schools of fish swimming around the pond ---
+    for (let si = 0; si < schools.length; si++) {
+      const s = schools[si];
+      s.drift += dt * 0.25;
+      s.tcx = clamp(s.tcx + Math.cos(s.drift) * dt * 36, 300, WORLD.w - 300);
+      s.tcy = clamp(s.tcy + Math.sin(s.drift * 0.83) * dt * 36, 300, WORLD.h - 300);
+      s.cx += (s.tcx - s.cx) * 0.015;
+      s.cy += (s.tcy - s.cy) * 0.015;
+      const inView = !(s.cx + 220 < camera.x || s.cx - 220 > camera.x + vw ||
+                       s.cy + 220 < camera.y || s.cy - 220 > camera.y + vh);
+      for (const f of s.fish) {
+        const fdx = s.cx - f.x, fdy = s.cy - f.y;
+        const fd  = Math.hypot(fdx, fdy) || 1;
+        // scatter from the unicorn if she gets too close
+        const ux = f.x - unicorn.x, uy = f.y - unicorn.y, ud = Math.hypot(ux, uy);
+        let targetAng;
+        if (ud < 120) targetAng = Math.atan2(uy, ux);
+        else          targetAng = Math.atan2(fdy, fdx);
+        let diff = targetAng - f.ang;
+        while (diff > Math.PI)  diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        f.ang += diff * 0.06;
+        f.phase += dt * 7;
+        const spd = ud < 120 ? 110 : 50;
+        f.x += Math.cos(f.ang) * spd * dt;
+        f.y += Math.sin(f.ang) * spd * dt;
+      }
+      if (!inView) continue;
+      for (const f of s.fish) {
+        if (f.x + 20 < camera.x || f.x - 20 > camera.x + vw ||
+            f.y + 20 < camera.y || f.y - 20 > camera.y + vh) continue;
+        const wig = Math.sin(f.phase) * 0.35;
+        ctx.save();
+        ctx.translate(f.x, f.y);
+        ctx.rotate(f.ang);
+        ctx.fillStyle = s.color;
+        ctx.beginPath();
+        ctx.moveTo(-6, 0);
+        ctx.lineTo(-12, -4 + wig * 4);
+        ctx.lineTo(-12,  4 + wig * 4);
+        ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(0, 0, 7, 4, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#222';
+        ctx.beginPath(); ctx.arc(3, -1, 0.9, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    // --- whale drifting along a slow figure-of-eight ---
+    whale.t += dt * 0.04;
+    whale.x = 1500 + (Math.sin(whale.t * 0.7) * 0.5 + 0.5) * (WORLD.w - 3000);
+    whale.y = 1500 + (Math.sin(whale.t * 0.43 + 1.7) * 0.5 + 0.5) * (WORLD.h - 3000);
+    whale.ang = Math.atan2(
+      Math.cos(whale.t * 0.43 + 1.7) * 0.43,
+      Math.cos(whale.t * 0.7) * 0.7,
+    );
+    if (!(whale.x + 280 < camera.x || whale.x - 280 > camera.x + vw ||
+          whale.y + 280 < camera.y || whale.y - 280 > camera.y + vh)) {
+      ctx.save();
+      ctx.translate(whale.x, whale.y);
+      ctx.rotate(whale.ang);
+      // shadow / underwater body
+      ctx.fillStyle = 'rgba(8,32,52,0.55)';
+      ctx.beginPath(); ctx.ellipse(0, 14, 200, 70, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#577a96';
+      ctx.beginPath(); ctx.ellipse(0, 0, 180, 56, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#9fb6c8';
+      ctx.beginPath(); ctx.ellipse(20, 16, 150, 28, 0, 0, Math.PI * 2); ctx.fill();
+      // tail
+      ctx.fillStyle = '#466a86';
+      ctx.beginPath();
+      ctx.moveTo(-160, 0); ctx.lineTo(-230, -46); ctx.lineTo(-200, 0); ctx.lineTo(-230, 46);
+      ctx.closePath(); ctx.fill();
+      // fluke spots
+      ctx.fillStyle = 'rgba(220,235,245,0.45)';
+      ctx.beginPath(); ctx.arc(-40, -10, 12, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(-90,  18, 10, 0, Math.PI * 2); ctx.fill();
+      // eye + smile
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(130, -10, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#222';
+      ctx.beginPath(); ctx.arc(132, -10, 3.5, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(60,40,30,0.7)';
+      ctx.lineWidth = 2; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.arc(150, 6, 18, Math.PI * 0.15, Math.PI * 0.55); ctx.stroke();
+      // occasional spout
+      if (now > whale.spoutAt && Math.random() < 0.004) whale.spoutAt = now + 1200;
+      if (now < whale.spoutAt) {
+        const age = (whale.spoutAt - now) / 1200;
+        ctx.fillStyle = `rgba(220,240,255,${0.8 * age})`;
+        for (let i = 0; i < 10; i++) {
+          const a = -Math.PI / 2 + (Math.random() - 0.5) * 0.5;
+          const r = (1 - age) * 80 + Math.random() * 12;
+          ctx.beginPath();
+          ctx.arc(40 + Math.cos(a) * r, -16 + Math.sin(a) * r, 3 + Math.random() * 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+
+    // --- frogs on the Sunshine Shallows lily pads ---
+    for (const f of frogs) {
+      const d = Math.hypot(f.x - unicorn.x, f.y - unicorn.y);
+      if (d < 110 && now > f.hopUntil) {
+        f.hop = 1;
+        f.hopUntil = now + 1800;
+        chime(2 + Math.floor(Math.random() * 4));
+      }
+      f.hop = Math.max(0, f.hop - dt * 1.6);
+      if (f.x + 30 < camera.x || f.x - 30 > camera.x + vw ||
+          f.y + 30 < camera.y || f.y - 30 > camera.y + vh) continue;
+      const lift = Math.sin(f.hop * Math.PI) * 14;
+      const fy = f.y - lift;
+      ctx.fillStyle = '#3a8a4a';
+      ctx.beginPath(); ctx.ellipse(f.x, fy, 8, 6, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#5cb56a';
+      ctx.beginPath(); ctx.ellipse(f.x, fy - 1, 6, 4, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(f.x - 3, fy - 4, 2.2, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(f.x + 3, fy - 4, 2.2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#111';
+      ctx.beginPath(); ctx.arc(f.x - 3, fy - 4, 1.1, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(f.x + 3, fy - 4, 1.1, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // --- scattered scenes ---
+    for (const s of SCENES) {
+      if (!s.found && Math.hypot(s.x - unicorn.x, s.y - unicorn.y) < 60) {
+        s.found = true;
+        showMessage('✦ ' + s.msg);
+        for (let k = 0; k < COLORS.length; k++) burst(s.x, s.y, COLORS[k], 5, 0.8);
+        arpeggio([0, 2, 4, 7]);
+        if (s.kind === 'shell') maneShellsFound++;
+      }
+      if (s.x + 40 < camera.x || s.x - 40 > camera.x + vw ||
+          s.y + 40 < camera.y || s.y - 40 > camera.y + vh) continue;
+      const bob = Math.sin(now / 700 + s.x * 0.001) * 3;
+      const sy = s.y + bob;
+      const dim = s.found ? 0.45 : 1.0;
+      ctx.save();
+      ctx.translate(s.x, sy);
+      if (s.kind === 'bottle') {
+        ctx.fillStyle = `rgba(120,180,150,${0.85 * dim})`;
+        ctx.beginPath(); ctx.ellipse(0, 0, 18, 7, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = `rgba(80,60,40,${dim})`;
+        ctx.fillRect(15, -3, 5, 6);
+        ctx.fillStyle = `rgba(240,225,180,${dim})`;
+        ctx.fillRect(-6, -2, 10, 4);
+      } else if (s.kind === 'bouquet') {
+        const petals = ['#ff8aa8','#ffd23f','#c768ff','#7be86c','#ff6bd1'];
+        petals.forEach((c, i) => {
+          const a = (i / petals.length) * Math.PI * 2;
+          ctx.fillStyle = `rgba(${parseInt(c.substr(1,2),16)},${parseInt(c.substr(3,2),16)},${parseInt(c.substr(5,2),16)},${dim})`;
+          ctx.beginPath(); ctx.arc(Math.cos(a) * 5, Math.sin(a) * 5 - 4, 5, 0, Math.PI * 2); ctx.fill();
+        });
+        ctx.strokeStyle = `rgba(60,120,60,${dim})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, 12); ctx.stroke();
+      } else if (s.kind === 'boat') {
+        ctx.fillStyle = `rgba(240,235,220,${dim})`;
+        ctx.beginPath();
+        ctx.moveTo(-14, 4); ctx.lineTo(14, 4); ctx.lineTo(10, 10); ctx.lineTo(-10, 10);
+        ctx.closePath(); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(0, 4); ctx.lineTo(0, -14); ctx.lineTo(12, 0); ctx.closePath();
+        ctx.fill();
+      } else if (s.kind === 'teacup') {
+        ctx.fillStyle = `rgba(240,235,250,${dim})`;
+        ctx.beginPath(); ctx.ellipse(0, 0, 12, 8, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = `rgba(180,160,200,${dim})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(13, 0, 5, -Math.PI/2, Math.PI/2); ctx.stroke();
+        ctx.fillStyle = `rgba(180,140,220,${0.7 * dim})`;
+        ctx.beginPath(); ctx.ellipse(0, -2, 9, 4, 0, 0, Math.PI * 2); ctx.fill();
+      } else if (s.kind === 'heart') {
+        ctx.fillStyle = `rgba(255,150,180,${0.9 * dim})`;
+        ctx.beginPath();
+        ctx.moveTo(0, 6);
+        ctx.bezierCurveTo(-12, -4, -18, -14, 0, -6);
+        ctx.bezierCurveTo(18, -14, 12, -4, 0, 6);
+        ctx.closePath(); ctx.fill();
+      } else if (s.kind === 'shell') {
+        const grad = ctx.createRadialGradient(-3, -3, 1, 0, 0, 14);
+        grad.addColorStop(0, `rgba(255,255,255,${dim})`);
+        grad.addColorStop(0.4, `rgba(255,210,230,${dim})`);
+        grad.addColorStop(1, `rgba(180,140,200,${dim})`);
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = `rgba(255,140,200,${0.6 * dim})`;
+        ctx.lineWidth = 1;
+        for (let r = 0; r < 6; r++) {
+          const a = (r / 6) * Math.PI - Math.PI / 2;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(Math.cos(a) * 13, Math.sin(a) * 13);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
     // particles
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
@@ -710,11 +1092,33 @@
 
     // UI (screen space)
     drawMap();
+    if (floatMsg) {
+      if (now > floatMsgEnd) floatMsg = '';
+      else {
+        const remain = floatMsgEnd - now;
+        const a = Math.min(1, remain / 600);
+        ctx.font = '600 18px system-ui, -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        const w = ctx.measureText(floatMsg).width + 28;
+        const x = VW / 2 - w / 2, y = VH - 100;
+        ctx.fillStyle = `rgba(8,30,45,${0.72 * a})`;
+        ctx.beginPath();
+        ctx.moveTo(x + 12, y);
+        ctx.arcTo(x + w, y, x + w, y + 36, 12);
+        ctx.arcTo(x + w, y + 36, x, y + 36, 12);
+        ctx.arcTo(x, y + 36, x, y, 12);
+        ctx.arcTo(x, y, x + w, y, 12);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = `rgba(255,255,255,${a})`;
+        ctx.fillText(floatMsg, VW / 2, y + 24);
+      }
+    }
 
     requestAnimationFrame(frame);
   }
 
   const RAINBOW = ['#ff5577', '#ff8a3d', '#ffd23f', '#7be86c', '#4fc3f7', '#7c6bff', '#c768ff'];
+  function maneColors() { return manePalette() || RAINBOW; }
 
   function drawUnicorn(now) {
     const scale = 1.0;
@@ -756,11 +1160,12 @@
     ctx.scale(scale, scale);
 
     // tail — rainbow streamers behind
+    const MANE = maneColors();
     ctx.lineCap = 'round';
-    for (let i = 0; i < RAINBOW.length; i++) {
-      ctx.strokeStyle = RAINBOW[i];
+    for (let i = 0; i < MANE.length; i++) {
+      ctx.strokeStyle = MANE[i];
       ctx.lineWidth = 2.4;
-      const baseY = -7 + i * (14 / (RAINBOW.length - 1));
+      const baseY = -7 + i * (14 / (MANE.length - 1));
       ctx.beginPath();
       ctx.moveTo(-16, baseY * 0.35);
       ctx.quadraticCurveTo(-28, baseY + wag * 0.4, -44 + wig * 4, baseY + wag);
@@ -795,10 +1200,10 @@
     ctx.strokeStyle = 'rgba(190,170,220,0.7)'; ctx.lineWidth = 1; ctx.stroke();
 
     // mane — rainbow streamers from neck/back of head
-    for (let i = 0; i < RAINBOW.length; i++) {
-      ctx.strokeStyle = RAINBOW[i];
+    for (let i = 0; i < MANE.length; i++) {
+      ctx.strokeStyle = MANE[i];
       ctx.lineWidth = 2.2;
-      const baseY = -9 + i * (16 / (RAINBOW.length - 1));
+      const baseY = -9 + i * (16 / (MANE.length - 1));
       ctx.beginPath();
       ctx.moveTo(11, baseY * 0.4 - 4);
       ctx.quadraticCurveTo(0, baseY * 0.7 - 4 + wag * 0.25, -10, baseY - 3 + wag * 0.5);
@@ -891,7 +1296,7 @@
       ctx.fillStyle = 'rgba(255,255,255,0.92)';
       ctx.font = '600 12px system-ui, -apple-system, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(z.name, zx, zy - zr - 6);
+      ctx.fillText((z.visited ? '★ ' : '? ') + z.name, zx, zy - zr - 6);
     });
     ZONES.forEach(z => {
       ctx.fillStyle = '#ffffff';
